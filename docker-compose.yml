@@ -1,0 +1,27 @@
+services:
+  cppsvc:
+    image: yathien/cppsvc:dev
+    restart: unless-stopped
+
+    network_mode: "host"
+
+    volumes:
+      - /dev:/dev
+      - /run/udev:/run/udev:ro
+
+  pysvc:
+    image: yathien/pysvc:dev
+    restart: unless-stopped
+    depends_on:
+      - cppsvc
+
+    network_mode: "host"
+
+    volumes:
+      - /dev:/dev
+      - /run/udev:/run/udev:ro
+
+    # For many USB camera setups, this helps (optional but commonly useful)
+    # If you want to keep it minimal, you can remove this and just rely on /dev/video*
+    # volumes:
+    #   - /dev/bus/usb:/dev/bus/usb
