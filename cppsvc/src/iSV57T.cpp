@@ -50,6 +50,15 @@ iSV57T::iSV57T(gpiod_chip *p_chip, unsigned p_dir_line, unsigned p_pul_line,
         strerror(errno));
 }
 
+iSV57T::~iSV57T() {
+  if (!m_pul_line || !m_dir_line)
+    throw std::runtime_error(
+        std::string("PUL and/or DIR lines are NULL. Failed to close lines. ") +
+        strerror(errno));
+  gpiod_line_release(m_pul_line);
+  gpiod_line_release(m_dir_line);
+}
+
 void iSV57T::rotate(uint8_t p_direction, float p_degree) {
   if (gpiod_line_set_value(m_dir_line, p_direction) < 0)
     throw std::runtime_error(

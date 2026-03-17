@@ -21,6 +21,14 @@ limitSwitch::limitSwitch(gpiod_chip *p_chip, unsigned p_gpio_line) {
                              strerror(errno));
 }
 
+limitSwitch::~limitSwitch() {
+  if (!m_line)
+    throw std::runtime_error(
+        std::string("GPIO lines are NULL. Failed to close lines. ") +
+        strerror(errno));
+  gpiod_line_release(m_line);
+}
+
 uint8_t limitSwitch::read() {
   int val = gpiod_line_get_value(m_line);
   if (val < 0)

@@ -30,6 +30,11 @@ public:
   limitSwitch(gpiod_chip *p_chip, unsigned p_gpio_line);
 
   /**
+   * @brief The destructor to free the GPIO lines.
+   */
+  ~limitSwitch();
+
+  /**
    * @brief Function to read the state of the switch.
    */
   uint8_t read();

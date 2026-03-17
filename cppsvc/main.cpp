@@ -104,5 +104,7 @@ int main() {
   std::this_thread::sleep_for(std::chrono::milliseconds(100));
   motor.rotate(iSV57T::CW, 360.0f);
 
+  gpiod_chip_close(chip);
+
   return 0;
 }

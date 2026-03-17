@@ -40,6 +40,11 @@ public:
          uint16_t p_pulse_per_rev);
 
   /**
+   * @brief The destructor to close the GPIO lines
+   */
+  ~iSV57T();
+
+  /**
    * @brief Function to control the motor's rotation.
    *
    * @param p_direction sets the direction the motor will rotate; CCW = 0 and CW
