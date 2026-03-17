@@ -1,9 +1,11 @@
 #pragma once
 
+#include <cerrno>
 #include <chrono>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <cstring>
 #include <gpiod.h>
 #include <iostream>
 #include <stdexcept>
@@ -12,7 +14,7 @@
 #include <unistd.h>
 
 /**
- * @brief The driver the iSV57T BLDC to function on the current setup
+ * @brief The driver for the iSV57T BLDC to function on the current setup
  */
 class iSV57T {
 public:
@@ -21,7 +23,7 @@ public:
   /**
    * @brief Constructs a new iSV57T object.
    *
-   * @param p_gpio_scope refers to the GPIO controller that handlers all the
+   * @param p_chip refers to the GPIO controller that handlers all the
    GPIO pins associated with it. Ensure that the motor connection uses pins on
    the same scope.
    * @param p_dir_line refers to the line offset for the GPIO pin connected to
@@ -34,7 +36,7 @@ public:
    speed. The lower you go, the faster the motor can rotate but at the cost of a
    coarse movement.
    */
-  iSV57T(const char *p_gpio_scope, unsigned p_dir_line, unsigned p_pul_line,
+  iSV57T(gpiod_chip *p_chip, unsigned p_dir_line, unsigned p_pul_line,
          uint16_t p_pulse_per_rev);
 
   /**
@@ -64,7 +66,6 @@ public:
   void set_pulse_high_us(float p_pulse_high_us);
 
 private:
-  gpiod_chip *m_chip;
   gpiod_line *m_dir_line;
   gpiod_line *m_pul_line;
 

@@ -89,12 +89,16 @@ main() {
 */
 
 int main() {
-  const char *gpio_chip = "/dev/gpiochip0";
-  const unsigned dur_line = 0;
-  const unsigned pul_line = 0;
+  const char *gpio_chip_char = "/dev/gpiochip0";
+  const unsigned dur_line = 8; // GPIO1; M40_GPIO0_00
+  const unsigned pul_line = 9; // GPIO2; M40_GPIO0_01
   const uint16_t pulse_per_rev = 2000;
 
-  iSV57T motor = iSV57T(gpio_chip, dur_line, pul_line, pulse_per_rev);
+  gpiod_chip *chip = gpiod_chip_open(gpio_chip_char);
+  if (!chip)
+    std::cerr << "Something bad happened\n";
+
+  iSV57T motor = iSV57T(chip, dur_line, pul_line, pulse_per_rev);
 
   motor.rotate(iSV57T::CCW, 360.0f);
   std::this_thread::sleep_for(std::chrono::milliseconds(100));
