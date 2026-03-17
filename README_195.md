@@ -1,170 +1,101 @@
-# Project Title
+# RoboMallet
 
-> One-line description of what your project does
+Source code for the ROBOTMALLET robotic system's control logic.
 
 ## Team
 
-| Name | GitHub | Email |
-|------|--------|-------|
-| Name 1 | [@username](https://github.com/username) | name@sjsu.edu |
-| Name 2 | [@username](https://github.com/username) | name@sjsu.edu |
-| Name 3 | [@username](https://github.com/username) | name@sjsu.edu |
-| Name 4 | [@username](https://github.com/username) | name@sjsu.edu |
+| Name            | GitHub                                     | Email                    |
+| --------------- | ------------------------------------------ | ------------------------ |
+| Kenny Tran      | [@ktran1121](https://github.com/ktran1121) | kenny.k.tran@sjsu.edu    |
+| Kshitij Shirule | [@K-Shirule](https://github.com/K-Shirule) | kshitij.shirule@sjsu.edu |
+| Nam Nguyen      | [@namng2](https://github.com/namng2)       | nam.h.nguyen04@sjsu.edu  |
+| Yathien Thai    | [@yyaatt0](https://github.com/yyaatt0)     | yathien.thai@sjsu.edu    |
 
-**Advisor:** [Advisor Name]
+**Advisor:** [Dr. Wencen Wu]
 
----
+## Prerequisites
 
-## Problem Statement
+- [Docker Desktop](https://www.docker.com/products/docker-desktop/) installed and running
+- A Docker Hub account (required to build and push container images)
+- Docker Buildx enabled (included by default in Docker Desktop)
+- SSH or terminal access to the target MCU/board ([PuTTY](https://www.putty.org/) recommended for Windows users)
 
-[2-3 sentences describing the problem you're solving and why it matters]
+## Installation
 
-## Solution
+1. Clone the repository:
 
-[2-3 sentences describing your solution approach]
+   ```bash
+   git clone https://github.com/<your-org>/RoboMallet.git
+   cd RoboMallet
+   ```
 
-### Key Features
+2. Log in to your Docker Hub account:
 
-- Feature 1
-- Feature 2
-- Feature 3
+   ```bash
+   docker login -u yathien
+   ```
 
----
+3. Build and push the C++ service container:
 
-## Demo
+   ```bash
+   docker buildx build --platform linux/arm64 -t yathien/cppsvc:dev --push ./cppsvc
+   ```
 
-[Link to demo video or GIF]
+4. Build and push the Python service container:
 
-**Live Demo:** [URL if deployed]
+   ```bash
+   docker buildx build --platform linux/arm64 -t yathien/pysvc:dev --push ./pysvc
+   ```
 
----
+## Configuration
 
-## Screenshots
+Before running the application, ensure the following hardware is connected to the MCU:
 
-| Feature | Screenshot |
-|---------|------------|
-| [Feature 1] | ![Screenshot](docs/screenshots/feature1.png) |
-| [Feature 2] | ![Screenshot](docs/screenshots/feature2.png) |
+- Motor drivers (iSV57T) wired to the appropriate GPIO pins for DIR and PUL signals
+- Limit switches wired to the designated GPIO input pins
+- All power supplies are connected and within operating voltage range
 
----
+Refer to the Ixora carrier board datasheet and the pin mapping in the project documentation for exact GPIO assignments.
 
-## Tech Stack
+## Running the Application
 
-| Category | Technology |
-|----------|------------|
-| Frontend | |
-| Backend | |
-| Database | |
-| Deployment | |
-
----
-
-## Getting Started
-
-### Prerequisites
-
-- [Prerequisite 1] v.X.X+
-- [Prerequisite 2] v.X.X+
-
-### Installation
+SSH into the target board and run:
 
 ```bash
-# Clone the repository
-git clone https://github.com/[org]/[repo].git
-cd [repo]
-
-# Install dependencies
-[install command]
-
-# Set up environment variables
-cp .env.example .env
-# Edit .env with your values
-
-# Run database migrations (if applicable)
-[migration command]
+cd ~/RoboMallet
+docker compose pull
+docker compose up -d
 ```
 
-### Running Locally
+To view logs:
 
 ```bash
-# Development mode
-[dev command]
-
-# The app will be available at http://localhost:XXXX
+docker compose logs -f
 ```
 
-### Running Tests
+To stop the application:
 
 ```bash
-[test command]
+docker compose down
 ```
 
----
+## Usage
 
-## API Reference
-
-<details>
-<summary>Click to expand API endpoints</summary>
-
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| GET | `/api/resource` | Get all resources |
-| GET | `/api/resource/:id` | Get resource by ID |
-| POST | `/api/resource` | Create new resource |
-| PUT | `/api/resource/:id` | Update resource |
-| DELETE | `/api/resource/:id` | Delete resource |
-
-</details>
-
----
+Once the containers are running, the robotic system will initialize the motor drivers and limit switches on startup. The system listens for commands to control mallet rotation and positioning.
 
 ## Project Structure
 
 ```
-.
-├── [folder]/           # Description
-├── src/                # Source code files
-├── tests/              # Test files
-├── docs/               # Documentation files
+RoboMallet/
+├── cppsvc/                 # C++ service (motor control, GPIO interface)
+│   ├── include/            # Header files (.hpp)
+│   ├── src/                # Source files (.cpp)
+│   ├── main.cpp            # Entry point
+│   ├── Dockerfile          # ARM64 container build
+│   └── CMakeLists.txt      # Build configuration
+├── pysvc/                  # Python service
+│   ├── Dockerfile          # ARM64 container build
+│   └── main.py             # Entry point
+├── docker-compose.yml      # Multi-container orchestration
 └── README.md
 ```
-
----
-
-## Contributing
-
-1. Create a feature branch (`git checkout -b feature/amazing-feature`)
-2. Commit your changes (`git commit -m 'Add amazing feature'`)
-3. Push to the branch (`git push origin feature/amazing-feature`)
-4. Open a Pull Request
-
-### Branch Naming
-
-- `feature/` - New features
-- `fix/` - Bug fixes
-- `docs/` - Documentation updates
-- `refactor/` - Code refactoring
-
-### Commit Messages
-
-Use clear, descriptive commit messages:
-- `Add user authentication endpoint`
-- `Fix database connection timeout issue`
-- `Update README with setup instructions`
-
----
-
-## Acknowledgments
-
-- [Resource/Library/Person]
-- [Resource/Library/Person]
-
----
-
-## License
-
-This project is licensed under the <FILL IN> License - see the [LICENSE](LICENSE) file for details.
-
----
-
-*CMPE 195A/B - Senior Design Project | San Jose State University | Spring 2026*
