@@ -4,8 +4,8 @@ import time
 
 cap = cv2.VideoCapture(0)  # 0 default, 1 extra camera
 cap.set(cv2.CAP_PROP_FPS, 120)
-cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
-cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
+cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
+cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 360)
 
 # display fps
 frame_count = 0
@@ -18,7 +18,7 @@ MIN_AREA = 300  # ignore tiny green areas
 MAX_JUMP_PX = 200  # reject sudden jumps (noise and outliers)
 
 # If abs(dx) <= STILL_THRESH_PX AND abs(dy) <= STILL_THRESH_PX for STILL_CONFIRM_FRAMES, treat as STILL (no trajectory line)
-STILL_THRESH_PX = 20
+STILL_THRESH_PX = 5
 STILL_CONFIRM_FRAMES = 2
 
 # Direction visual line
