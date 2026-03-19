@@ -14,7 +14,7 @@ fps_display = 0
 UPDATE_INTERVAL = 1  # seconds
 
 # Tracking / detection
-MIN_AREA = 300  # ignore tiny red areas
+MIN_AREA = 300  # ignore tiny green areas
 MAX_JUMP_PX = 200  # reject sudden jumps (noise and outliers)
 
 # If abs(dx) <= STILL_THRESH_PX AND abs(dy) <= STILL_THRESH_PX for STILL_CONFIRM_FRAMES, treat as STILL (no trajectory line)
@@ -37,29 +37,25 @@ AREA_GAIN_THRESHOLD = 1.3
 GREEN = (0, 255, 0)
 BLUE = (255, 0, 0)
 
-def red_mask_hsv(frame_bgr):
+def green_mask_hsv(frame_bgr):
     hsv = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2HSV)
 
-    lower1 = np.array([0, 110, 60], dtype=np.uint8)
-    upper1 = np.array([10, 255, 255], dtype=np.uint8)
-    lower2 = np.array([170, 110, 60], dtype=np.uint8)
-    upper2 = np.array([180, 255, 255], dtype=np.uint8)
+    lower1 = np.array([35, 60, 60], dtype=np.uint8)
+    upper1 = np.array([85, 255, 255], dtype=np.uint8)
 
-    m1 = cv2.inRange(hsv, lower1, upper1)
-    m2 = cv2.inRange(hsv, lower2, upper2)
-    mask = cv2.bitwise_or(m1, m2)
+    mask = cv2.inRange(hsv, lower1, upper1)
 
     kernel = np.ones((5, 5), np.uint8)
     mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel, iterations=1)
     mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel, iterations=2)
     return mask
 
-def detect_red_puck_center(frame_bgr):
+def detect_green_puck_center(frame_bgr):
 
-    # Returns puck center (cx, cy) from largest red contour and returns the area of that largest contour
+    # Returns puck center (cx, cy) from largest green contour and returns the area of that largest contour
 
     h, w = frame_bgr.shape[:2]
-    mask = red_mask_hsv(frame_bgr)
+    mask = green_mask_hsv(frame_bgr)
 
     contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
     if not contours:
@@ -161,7 +157,7 @@ while True:
     h, w = frame.shape[:2]
 
     # detect returns center, mask, and area (area = 0 if nothing)
-    center, mask, area = detect_red_puck_center(frame)
+    center, mask, area = detect_green_puck_center(frame)
 
     # Update p0 and p1 using consecutive accepted detections
     if center is not None:
