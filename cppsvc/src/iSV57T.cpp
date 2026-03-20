@@ -65,6 +65,8 @@ void iSV57T::rotate(uint8_t p_direction, float p_degree) {
         std::string("Failed to set DIR pin during motor rotation. ") +
         strerror(errno));
 
+  std::this_thread::sleep_for(std::chrono::microseconds(10));
+
   const long pulses =
       static_cast<long>(std::llround((p_degree / 360.0) * m_pulse_per_rev));
 

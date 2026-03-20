@@ -2,11 +2,11 @@ services:
   cppsvc:
     image: yathien/cppsvc:dev
     restart: unless-stopped
-
     network_mode: "host"
-
+    priviledged: true
+    devices:
+      - /dev/gpiochip0:/dev/gpiochip0
     volumes:
-      - /dev:/dev
       - /run/udev:/run/udev:ro
 
   pysvc:
@@ -14,11 +14,11 @@ services:
     restart: unless-stopped
     depends_on:
       - cppsvc
-
     network_mode: "host"
-
+    priviledged: true
+    devices:
+      - /dev/video0:/dev/video0
     volumes:
-      - /dev:/dev
       - /run/udev:/run/udev:ro
 
     # For many USB camera setups, this helps (optional but commonly useful)
