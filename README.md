@@ -99,3 +99,8 @@ RoboMallet/
 ├── docker-compose.yml      # Multi-container orchestration
 └── README.md
 ```
+
+## Demo
+
+🎥 **Project Demo Video**  
+[CMPE195B RoboMallet Group39 Demo 1](https://youtu.be/AesrC-o85-U)
