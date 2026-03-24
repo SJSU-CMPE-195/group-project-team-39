@@ -2,6 +2,19 @@ import cv2
 import numpy as np
 import time
 
+# ── AI Feature Flags ──────────────────────────────────────────────────────────
+# Each module is independent; flip any flag to False to revert to the original
+# classical-CV behaviour for that component.
+USE_KALMAN_TRACKER  = True   # Kalman filter: smooth position + velocity from state
+USE_AI_TRAJECTORY   = True   # Polynomial fit: better trajectory for curved/spin paths
+USE_YOLO_DETECTOR   = False  # Neural-net detection — set True after training a model
+YOLO_MODEL_PATH     = "puck_model.pt"  # path to trained YOLOv8 weights (see yolo_detector.py)
+# ─────────────────────────────────────────────────────────────────────────────
+
+from kalman_tracker      import KalmanPuckTracker
+from trajectory_predictor import TrajectoryPredictor
+from yolo_detector       import PuckDetector
+
 cap = cv2.VideoCapture(0)  # 0 default, 1 extra camera
 cap.set(cv2.CAP_PROP_FPS, 120)
 cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
@@ -149,6 +162,15 @@ tracked_area = None
 # Stillness counter
 still_count = 0
 
+# ── AI component init ─────────────────────────────────────────────────────────
+_detector  = PuckDetector(
+    model_path=YOLO_MODEL_PATH if USE_YOLO_DETECTOR else None,
+    min_area=MIN_AREA,
+)
+_kalman    = KalmanPuckTracker(process_noise=1.0, meas_noise=10.0) if USE_KALMAN_TRACKER else None
+_predictor = TrajectoryPredictor(history_len=12, poly_degree=2)    if USE_AI_TRAJECTORY  else None
+# ─────────────────────────────────────────────────────────────────────────────
+
 while True:
     ret, frame = cap.read()
     if not ret:
@@ -156,8 +178,8 @@ while True:
 
     h, w = frame.shape[:2]
 
-    # detect returns center, mask, and area (area = 0 if nothing)
-    center, mask, area = detect_green_puck_center(frame)
+    # ── Detection ─────────────────────────────────────────────────────────────
+    center, area, _det_mode = _detector.detect(frame)
 
     # Update p0 and p1 using consecutive accepted detections
     if center is not None:
@@ -166,6 +188,10 @@ while True:
         if p1 is None:
             p1 = center
             tracked_area = area
+            if _kalman:
+                _kalman.init(*center)
+            if _predictor:
+                _predictor.update(*center)
         else:
             dx = center[0] - p1[0]
             dy = center[1] - p1[1]
@@ -182,10 +208,25 @@ while True:
 
             if cond_normal_accept or cond_area_bigger or cond_missing_relax:
                 p0 = p1
-                p1 = center
+
+                # ── Kalman: update with raw detection, use smoothed position ──
+                if _kalman:
+                    smooth = _kalman.update(*center)
+                    p1 = smooth if smooth else center
+                else:
+                    p1 = center
+
                 tracked_area = area
+
+                if _predictor:
+                    _predictor.update(*p1)
     else:
         missing_count += 1
+        # Kalman advances its state during brief occlusions
+        if _kalman:
+            predicted = _kalman.predict()
+            if predicted and p1 is not None:
+                p1 = predicted
 
     # Borders
     cv2.line(frame, (0, 0), (w - 1, 0), (255, 255, 255), 1)           # top
@@ -201,8 +242,18 @@ while True:
     dir_tip = None # arrow tip for direction
 
     if p0 is not None and p1 is not None:
-        vx_raw = p1[0] - p0[0]
-        vy_raw = p1[1] - p0[1]
+        # ── Velocity estimate ─────────────────────────────────────────────────
+        # Kalman gives a smoothed (vx, vy) from its state — far less noisy than
+        # the raw p1-p0 pixel difference.
+        if _kalman and _kalman.initialized:
+            vx_raw, vy_raw = _kalman.velocity
+        else:
+            vx_raw = p1[0] - p0[0]
+            vy_raw = p1[1] - p0[1]
+
+        # Override with polynomial derivative when predictor has enough history
+        if _predictor and _predictor.n >= 3:
+            vx_raw, vy_raw = _predictor.predicted_velocity()
 
         # Count consecutive "small motion" frames to avoid jitter triggering BOUNCE
         if abs(vx_raw) <= STILL_THRESH_PX and abs(vy_raw) <= STILL_THRESH_PX:
@@ -226,9 +277,15 @@ while True:
             tip_y = int(round(p1[1] + DIR_ARROW_LEN * uy))
             dir_tip = (int(np.clip(tip_x, 0, w - 1)), int(np.clip(tip_y, 0, h - 1)))
 
-            # Use direction vector for intercept/bounce ray
-            v_dir = (ux, uy)
-            intercept_pt, hit_wall = first_border_intersection(p1, v_dir, w, h)
+            # ── Trajectory / intercept prediction ─────────────────────────────
+            # With enough history the polynomial predictor walks along the curve
+            # to find the wall hit (handles spin/arc).  Falls back to linear ray
+            # when history is short.
+            if _predictor and _predictor.n >= 3:
+                intercept_pt, hit_wall = _predictor.predict_border_hit(w, h)
+            else:
+                v_dir = (ux, uy)
+                intercept_pt, hit_wall = first_border_intersection(p1, v_dir, w, h)
 
             predicted_pt = None
             predicted_label = None
@@ -237,8 +294,10 @@ while True:
                 predicted_pt = intercept_pt
                 predicted_label = "INTERCEPT"
 
-                # Only bounce if first hit is top/bottom (no bounce for left/right)
+                # Bounce: post-bounce history isn't available yet, so always use
+                # linear reflection regardless of AI mode.
                 if hit_wall in ("top", "bottom"):
+                    v_dir = (ux, uy)
                     v_out = reflect(v_dir, hit_wall)
                     bounce_end, _ = first_border_intersection(intercept_pt, v_out, w, h)
                     if bounce_end is not None:
@@ -291,6 +350,13 @@ while True:
 
     cv2.putText(frame, f"FPS: {fps_display:.1f}", (20, 50),
                 cv2.FONT_HERSHEY_SIMPLEX, 1, GREEN, 2)
+
+    # AI mode indicator
+    ai_label = f"[{_detector.mode}]"
+    if _kalman:  ai_label += "[KF]"
+    if _predictor: ai_label += "[POLY]"
+    cv2.putText(frame, ai_label, (20, 85),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.55, (200, 200, 0), 1)
 
     cv2.imshow("RoboMallet", frame)
 
