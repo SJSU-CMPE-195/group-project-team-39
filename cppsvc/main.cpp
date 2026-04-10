@@ -111,6 +111,9 @@ int main() {
   //   std::cerr << e.what() << "\n";
   // }
   iSV57T motor = iSV57T(chip, dir_line, pul_line, pulse_per_rev);
+
+  motor.set_target_rpm(3000);
+
   std::cout << "Finished motor object initialization!\n";
 
   std::cout << "Starting motor rotations...\n";
