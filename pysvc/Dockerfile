@@ -1,11 +1,14 @@
-FROM torizon/debian:3-bookworm
-
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    python3 python3-pip \
-    ca-certificates \
- && rm -rf /var/lib/apt/lists/*
+FROM python:3.11-slim
 
 WORKDIR /app
-COPY main.py /app/main.py
 
-ENTRYPOINT ["python3", "/app/main.py"]
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libgl1 \
+    libglib2.0-0 \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN pip install --no-cache-dir opencv-python-headless numpy
+
+COPY detect_headless.py .
+
+CMD ["python3", "detect_headless.py"]
