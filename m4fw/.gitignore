@@ -1,0 +1,13 @@
+# Build artifacts
+build/
+
+# SDK files extracted via extract_sdk.sh (large, user-downloaded)
+# Uncomment the lines below if you commit SDK files to the repo instead:
+# CMSIS/Include/
+# device/MIMX8QM6_cm4_core0.h
+# device/MIMX8QM6_cm4_core0_features.h
+# device/fsl_device_registers.h
+# drivers/fsl_*
+
+# Board reference files (from SDK, for reference only)
+board/reference/
