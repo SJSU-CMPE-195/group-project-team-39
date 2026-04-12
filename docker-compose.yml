@@ -1,27 +1,36 @@
 services:
+  # C++ container for embedded control (no RTOS)
   cppsvc:
     image: yathien/cppsvc:dev
     restart: unless-stopped
     network_mode: "host"
+    ipc: host
     priviledged: true
     devices:
-      - /dev/gpiochip0:/dev/gpiochip0
+      - /dev/gpiochip2:/dev/gpiochip2
+  # M4 Firmware Loader - loads FreeRTOS firmware onto Cortex-M4 core 0 via U-Boot bootaux
+  m4loader:
+    build:
+      context: ./m4fw
+      dockerfile: Dockerfile
+    image: yathien/m4loader:dev
+    restart: "no"
+    privileged: true
     volumes:
+      - /sys:/sys
+      - /var/m4fw:/host-firmware
       - /run/udev:/run/udev:ro
-
+  # Python container for vision processing
   pysvc:
     image: yathien/pysvc:dev
     restart: unless-stopped
     depends_on:
-      - cppsvc
+      m4loader:
+        condition: service_completed_successfully
     network_mode: "host"
-    priviledged: true
+    ipc: host
+    privileged: true
     devices:
       - /dev/video0:/dev/video0
     volumes:
       - /run/udev:/run/udev:ro
-
-    # For many USB camera setups, this helps (optional but commonly useful)
-    # If you want to keep it minimal, you can remove this and just rely on /dev/video*
-    # volumes:
-    #   - /dev/bus/usb:/dev/bus/usb
