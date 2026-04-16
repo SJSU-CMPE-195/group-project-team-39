@@ -1,4 +1,5 @@
 import cv2
+import math
 import numpy as np
 import time
 
@@ -22,12 +23,16 @@ SCALE = actual_w / 640.0
 
 MIN_AREA = int(300 * SCALE * SCALE)
 MAX_JUMP_PX = int(200 * SCALE)
-STILL_THRESH_PX = 3.0
+STILL_THRESH_PX = 8.0
 STILL_CONFIRM_FRAMES = 5
 DIR_ARROW_LEN = int(120 * SCALE)
 
-PRINT_INTERVAL = 0.05
+PRINT_INTERVAL = 1
 last_print_t = 0.0
+last_vel_display_t = 0.0
+displayed_vx = 0.0
+displayed_vy = 0.0
+VEL_DISPLAY_INTERVAL = 0.0   # seconds between on-screen updates
 
 # If we miss this many frames in a row, throw the Kalman track away and
 # re-initialize on the next good detection.
@@ -42,17 +47,18 @@ BLUE = (255, 0, 0)
 YELLOW = (0, 255, 255)
 RED = (0, 0, 255)
 
+# Reuse the morphology kernel instead of re-creating it every frame
+MORPH_KERNEL = np.ones((5, 5), np.uint8)
+
+# Reuse HSV bounds arrays — no need to rebuild every call
+HSV_LOWER = np.array([35, 60, 60], dtype=np.uint8)
+HSV_UPPER = np.array([85, 255, 255], dtype=np.uint8)
+
 def green_mask_hsv(frame_bgr):
     hsv = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2HSV)
-
-    lower1 = np.array([35, 60, 60], dtype=np.uint8)
-    upper1 = np.array([85, 255, 255], dtype=np.uint8)
-
-    mask = cv2.inRange(hsv, lower1, upper1)
-
-    kernel = np.ones((5, 5), np.uint8)
-    mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel, iterations=1)
-    mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel, iterations=2)
+    mask = cv2.inRange(hsv, HSV_LOWER, HSV_UPPER)
+    mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, MORPH_KERNEL, iterations=1)
+    mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, MORPH_KERNEL, iterations=2)
     return mask
 
 def detect_green_puck_center(frame_bgr):
@@ -128,7 +134,7 @@ def reflect(v, wall):
     return (vx, vy)
 
 def normalize(vx, vy, eps=1e-9):
-    mag = (vx * vx + vy * vy) ** 0.5
+    mag = math.hypot(vx, vy)
     if mag < eps:
         return 0.0, 0.0
     return vx / mag, vy / mag
@@ -136,29 +142,22 @@ def normalize(vx, vy, eps=1e-9):
 def create_kalman():
     kf = cv2.KalmanFilter(4, 2)
 
-    kf.measurementMatrix = np.array([
-        [1, 0, 0, 0],
-        [0, 1, 0, 0]
-    ], np.float32)
+    # Measurement extracts x, y from state [x, y, vx, vy]
+    kf.measurementMatrix = np.eye(2, 4, dtype=np.float32)
 
+    # Constant-velocity model: new_pos = old_pos + velocity
     kf.transitionMatrix = np.array([
         [1, 0, 1, 0],
         [0, 1, 0, 1],
         [0, 0, 1, 0],
-        [0, 0, 0, 1]
-    ], np.float32)
+        [0, 0, 0, 1],
+    ], dtype=np.float32)
 
-    kf.processNoiseCov = np.array([
-        [1e-2, 0,    0,    0],
-        [0,    1e-2, 0,    0],
-        [0,    0,    1.0,  0],
-        [0,    0,    0,    1.0]
-    ], np.float32)
+    # Trust physics on position, let velocity adapt quickly, VX, VY updating time kf.processNoiseCov = np.diag([1e-2, 1e-2, UPDATING_TIME, UPDATING_TIME]).
+    kf.processNoiseCov = np.diag([1e-2, 1e-2, 0.1, 0.1]).astype(np.float32)
 
-    kf.measurementNoiseCov = np.array([
-        [5e-2, 0],
-        [0,    5e-2]
-    ], np.float32)
+    # Camera is reasonably reliable
+    kf.measurementNoiseCov = (5e-2 * np.eye(2)).astype(np.float32)
 
     kf.errorCovPost = np.eye(4, dtype=np.float32)
     return kf
@@ -356,11 +355,18 @@ while True:
                 cv2.FONT_HERSHEY_SIMPLEX, 1, GREEN, 2)
 
     if kalman_initialized and filtered_vel is not None:
-        cv2.putText(frame, f"vx={filtered_vel[0]:.2f} vy={filtered_vel[1]:.2f}", (20, 75),
+        now_t = time.time()
+        if now_t - last_vel_display_t >= VEL_DISPLAY_INTERVAL:
+            displayed_vx = filtered_vel[0]
+            displayed_vy = filtered_vel[1]
+            last_vel_display_t = now_t
+            if abs(displayed_vx) > 2 or abs(displayed_vy) > 2:
+                cv2.putText(frame, f"vx={displayed_vx:.2f} vy={displayed_vy:.2f}", (20, 75),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.7, GREEN, 2)
 
-    cv2.putText(frame, f"missing={missing_count}", (20, 105),
-                cv2.FONT_HERSHEY_SIMPLEX, 0.7, GREEN, 2)
+    if missing_count > 0:
+        cv2.putText(frame, f"missing={missing_count}", (20, 105),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.7, GREEN, 2)
 
     cv2.imshow("RoboMallet", frame)
 
