@@ -102,7 +102,7 @@ RoboMallet/
 
 ## Demo
 
-🎥 **Project Demo Video**  
-[CMPE195B RoboMallet Group39 Demo 1](https://youtu.be/watch?v=AesrC-o85-U)
-```
-[CMPE195B RoboMallet Group39 Demo 2](https://youtu.be/WAsmsQb9nug)
+🎥 **Project Demo Videos**
+
+- [CMPE195B RoboMallet Group39 Demo 1](https://youtu.be/watch?v=AesrC-o85-U)
+- [CMPE195B RoboMallet Group39 Demo 2](https://youtu.be/WAsmsQb9nug)
