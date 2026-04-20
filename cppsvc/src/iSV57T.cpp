@@ -83,20 +83,25 @@ void iSV57T::rotate(uint8_t p_direction, float p_degree) {
 
   const uint32_t low_us = period_us - pulse_high_us;
 
+  const auto high_dur =
+      std::chrono::microseconds(static_cast<long long>(std::llround(pulse_high_us)));
+  const auto low_dur = std::chrono::microseconds(static_cast<long long>(low_us));
+
+  auto next = std::chrono::steady_clock::now();
   for (long i = 0; i < pulses; ++i) {
     if (gpiod_line_set_value(m_pul_line, 1) < 0)
       throw std::runtime_error(std::string("Failed to set PUL pin HIGH. ") +
                                strerror(errno));
 
-    std::this_thread::sleep_for(std::chrono::microseconds(
-        static_cast<long long>(std::llround(pulse_high_us)))); // Delaying
+    next += high_dur;
+    spin_until(next);
 
     if (gpiod_line_set_value(m_pul_line, 0) < 0)
       throw std::runtime_error(std::string("Failed to set PUL pin LOW. ") +
                                strerror(errno));
 
-    std::this_thread::sleep_for(std::chrono::microseconds(
-        static_cast<long long>(std::llround(low_us)))); // Delaying
+    next += low_dur;
+    spin_until(next);
   }
 }
 

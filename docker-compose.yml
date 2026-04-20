@@ -5,7 +5,7 @@ services:
     restart: unless-stopped
     network_mode: "host"
     ipc: host
-    priviledged: true
+    privileged: true
     devices:
       - /dev/gpiochip2:/dev/gpiochip2
   # M4 Firmware Loader - loads FreeRTOS firmware onto Cortex-M4 core 0 via U-Boot bootaux
@@ -27,6 +27,8 @@ services:
     depends_on:
       m4loader:
         condition: service_completed_successfully
+      cppsvc:
+        condition: service_started
     network_mode: "host"
     ipc: host
     privileged: true
