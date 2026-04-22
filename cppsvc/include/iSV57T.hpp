@@ -1,17 +1,11 @@
 #pragma once
 
-#include <cerrno>
 #include <chrono>
-#include <cmath>
-#include <cstddef>
 #include <cstdint>
-#include <cstring>
 #include <gpiod.h>
-#include <iostream>
-#include <stdexcept>
-#include <string>
-#include <thread>
-#include <unistd.h>
+
+typedef struct gpiod_chip gpiod_chip;
+typedef struct gpiod_line gpiod_line;
 
 /**
  * @brief The driver for the iSV57T BLDC to function on the current setup
