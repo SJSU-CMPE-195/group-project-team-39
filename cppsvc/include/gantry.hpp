@@ -148,12 +148,10 @@ private:
 
   iSV57T &m_lower_motor;
   iSV57T &m_upper_motor;
-  limitSwitch &m_x_origin;   // Pin 18
-  / limitSwitch &m_y_origin; // Pin 17
+  limitSwitch &m_x_origin; // Pin 18
+  limitSwitch &m_y_origin; // Pin 17
 
   // Let's deal with whole numbers for simiplicity
   int curr_x;
   int curr_y;
-  // unsigned int curr_x_rotation;
-  // unsigned int curr_y_rotation;
 };
