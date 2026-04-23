@@ -126,7 +126,7 @@ bool gantry::move_y(unsigned int p_mm, bool p_direction) {
   } else { // Moving South
     tar_lower_dir = iSV57T::CW;
     tar_upper_dir = iSV57T::CCW;
-    new_x = curr_y - p_mm;
+    new_y = curr_y - p_mm;
   }
 
   // Checks if moving p_mm will go beyond out gantry's boundaries
@@ -147,6 +147,9 @@ bool gantry::move_y(unsigned int p_mm, bool p_direction) {
 bool gantry::move_to_origin() {
   // Phase 1: move South until m_y_origin triggers
   float total_y_deg = 0.0f;
+
+  m_lower_motor.set_target_rpm(500);
+  m_upper_motor.set_target_rpm(500);
 
   while (m_y_origin.read() != 1) {
     if (total_y_deg >= GANTRY_Y_MAX_ROTATIONS) {

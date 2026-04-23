@@ -125,6 +125,11 @@ public:
   [[deprecated("Work in Progress")]] bool move_diagonal(int p_mm,
                                                         bool p_direction);
 
+  // Testing
+  // enum class MotorSelect { BOTH, LOWER_ONLY, UPPER_ONLY };
+  // void rotate_motors(float p_deg, uint8_t p_lower_dir, uint8_t p_upper_dir,
+  //                    MotorSelect p_select);
+
 private:
   /**
    * @brief Selects which motor(s) to run in rotate_both_motors.
@@ -148,8 +153,8 @@ private:
 
   iSV57T &m_lower_motor;
   iSV57T &m_upper_motor;
-  limitSwitch &m_x_origin; // Pin 18
-  limitSwitch &m_y_origin; // Pin 17
+  limitSwitch &m_x_origin;
+  limitSwitch &m_y_origin;
 
   // Let's deal with whole numbers for simiplicity
   int curr_x;

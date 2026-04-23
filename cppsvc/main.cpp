@@ -19,15 +19,10 @@
 #include "include/iSV57T.hpp"
 #include "limitSwitch.hpp"
 
-// gpio-641 (MXM3_11/GPIO5       ) // Gotta figure out what line those are but
-// they belong to chip3 gpio-642 (MXM3_13/GPIO6
-
-// Physical Pin 17 is South North limit switch (y)
-// Physical Pin 18 is West East limit switch x)
-
 int main() {
   const char *gpio_chip4_char = "/dev/gpiochip4"; // For the limit switch GPIO
   const char *gpio_chip0_char = "/dev/gpiochip0"; // For the motors GPIO
+
   // m1
   const unsigned m1_dir_line = 8; // Physical Pin 13
   const unsigned m1_pul_line = 9; // Physical Pin 14
@@ -43,17 +38,18 @@ int main() {
   const uint16_t pulse_per_rev = 2000;
 
   gpiod_chip *chip0 = gpiod_chip_open(gpio_chip0_char);
-  if (!chip) {
-    fprintf(stderr, "Failed to open %s for motor pins: %s\n", gpio_chip_char,
+  if (!chip0) {
+    fprintf(stderr, "Failed to open %s for motor pins: %s\n", gpio_chip0_char,
             strerror(errno));
+    gpiod_chip_close(chip0);
     return 0;
   }
 
   gpiod_chip *chip4 = gpiod_chip_open(gpio_chip4_char);
-  if (!chip2) {
+  if (!chip4) {
     fprintf(stderr, "Failed to open %s for limit switches: %s\n",
-            gpio_chip_char, strerror(errno));
-    gpiod_chip_close(chip);
+            gpio_chip4_char, strerror(errno));
+    gpiod_chip_close(chip4);
     return 0;
   }
 
@@ -79,19 +75,12 @@ int main() {
 
   std::cout << "Initializing motor object...\n";
 
-  iSV57T m_lower = iSV57T(chip, m1_dir_line, m1_pul_line, pulse_per_rev);
-  iSV57T m_upper = iSV57T(chip, m2_dir_line, m2_pul_line, pulse_per_rev);
+  iSV57T m_lower = iSV57T(chip0, m1_dir_line, m1_pul_line, pulse_per_rev);
+  iSV57T m_upper = iSV57T(chip0, m2_dir_line, m2_pul_line, pulse_per_rev);
 
   // Setting RPM Test
-  // m1.set_target_rpm(700);
-  // m1.set_target_rpm(700);
-  // m2.set_target_rpm(1000);
-  // m2.set_target_rpm(1000);
-  // m1.set_target_rpm(500);
-  // m2.set_target_rpm(500);
-  // m1.set_target_rpm(300);
-  // m2.set_target_rpm(300);
-  // m1.set_target_rpm(900);
+  m_lower.set_target_rpm(500);
+  m_upper.set_target_rpm(500);
 
   std::cout << "Finished motor object initialization!\n";
 
@@ -106,16 +95,23 @@ int main() {
 
   // Make the rotate_motor function public when testing.
   // Moving North
-  // g.rotate_motors(100, iSV57T::CCW, iSV57T::CW, gantry::MotorSelect::BOTH);
+  // g.rotate_motors(720, iSV57T::CCW, iSV57T::CW, gantry::MotorSelect::BOTH);
 
   // Moving South
-  // g.rotate_motors(100, iSV57T::CW, iSV57T::CCW, gantry::MotorSelect::BOTH);
+  // g.rotate_motors(720, iSV57T::CW, iSV57T::CCW, gantry::MotorSelect::BOTH);
 
   // Moving East
-  // g.rotate_motors(100, iSV57T::CCW, iSV57T::CCW, gantry::MotorSelect::BOTH);
+  // g.rotate_motors(720, iSV57T::CCW, iSV57T::CCW, gantry::MotorSelect::BOTH);
 
   // Moving West
-  // g.rotate_motors(100, iSV57T::CW, iSV57T::CW, gantry::MotorSelect::BOTH);
+  // g.rotate_motors(720, iSV57T::CW, iSV57T::CW, gantry::MotorSelect::BOTH);
+
+  // Move to Origin Test
+  // std::cout << "Moving to origin...\n";
+
+  // g.move_to_origin();
+
+  // std::cout << "Finished moving to origin!\n";
 
   // Delay line
   // std::this_thread::sleep_for(std::chrono::milliseconds(500));
