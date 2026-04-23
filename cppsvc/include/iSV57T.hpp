@@ -1,17 +1,11 @@
 #pragma once
 
-#include <cerrno>
 #include <chrono>
-#include <cmath>
-#include <cstddef>
 #include <cstdint>
-#include <cstring>
 #include <gpiod.h>
-#include <iostream>
-#include <stdexcept>
-#include <string>
-#include <thread>
-#include <unistd.h>
+
+typedef struct gpiod_chip gpiod_chip;
+typedef struct gpiod_line gpiod_line;
 
 /**
  * @brief The driver for the iSV57T BLDC to function on the current setup
@@ -73,6 +67,13 @@ public:
 private:
   gpiod_line *m_dir_line;
   gpiod_line *m_pul_line;
+
+  // Busy-waits until the given absolute time point, yielding microsecond-level
+  // accuracy without relying on OS scheduler wakeup precision.
+  static void spin_until(std::chrono::steady_clock::time_point tp) noexcept {
+    while (std::chrono::steady_clock::now() < tp) {
+    }
+  }
 
   uint16_t m_pulse_per_rev; // Pulse per Rev for the set on the BLDC
 
