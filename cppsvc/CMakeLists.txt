@@ -12,4 +12,4 @@ add_executable(cppsvc main.cpp ${SOURCES})
 
 target_include_directories(cppsvc PRIVATE include)
 
-target_link_libraries(cppsvc PRIVATE gpiod Threads::Threads)
+target_link_libraries(cppsvc PRIVATE gpiod Threads::Threads rt)

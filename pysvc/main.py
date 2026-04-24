@@ -1,283 +1,309 @@
-# import urllib.request
-# import sys
-import cv2
-import numpy as np
+# IPC Test — POSIX shared memory (mmap) + named semaphores
+# Both containers share /dev/shm via ipc:host in docker-compose.yml.
+# Three receive methods are demonstrated sequentially on the main thread
+# while a writer thread sends a counter byte every 500 ms.
+
+import mmap
+import posix_ipc
+import signal
+import threading
 import time
-import glob
 
-def open_camera():
-    devices = sorted(glob.glob('/dev/video*'))
-    print(f"Found video devices: {devices}", flush=True)
+# ─────────────────────────────────────────────────────────────────────────────
+# Shared memory layout  (64 bytes total, extensible via _reserved)
+# This layout must stay byte-for-byte identical to IPCBlock in cppsvc/main.cpp.
+#
+#   offset 0: py_ready   — pysvc writes 1 when py_data is valid
+#   offset 1: py_data    — payload byte: pysvc → cppsvc
+#   offset 2: cpp_ready  — cppsvc writes 1 when cpp_data is valid
+#   offset 3: cpp_data   — payload byte: cppsvc → pysvc
+#   offset 4–63: reserved for future fields (coordinates, status, etc.)
+# ─────────────────────────────────────────────────────────────────────────────
 
-    for dev in devices:
-        c = cv2.VideoCapture(dev, cv2.CAP_V4L2)
-        if c.isOpened():
-            ret, _ = c.read()
-            if ret:
-                print(f"Camera found at {dev}", flush=True)
-                return c
-            c.release()
+SHM_NAME   = "/ipc_block"
+SEM_PY_CPP = "/sem_py_to_cpp"
+SEM_CPP_PY = "/sem_cpp_to_py"
+SHM_SIZE   = 64
 
-    raise RuntimeError(f"No working camera found. Tried: {devices}")
+g_running = True
 
-cap = open_camera()
-cap.set(cv2.CAP_PROP_FPS, 120)
-cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
-cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 360)
+def _handle_signal(sig, frame):
+    global g_running
+    g_running = False
 
-# FPS tracking
-frame_count = 0
-start_time = time.time()
-fps_display = 0
-UPDATE_INTERVAL = 1  # seconds
+signal.signal(signal.SIGINT,  _handle_signal)
+signal.signal(signal.SIGTERM, _handle_signal)
 
-# Tracking / detection
-MIN_AREA = 300          # ignore tiny green areas
-MAX_JUMP_PX = 200       # reject sudden jumps (noise and outliers)
+# ── Open / create shared memory ──────────────────────────────────────────────
+# O_CREAT creates the region if absent, opens it if already present.
+# size= is only applied when creating; the existing size is kept otherwise.
+shm = posix_ipc.SharedMemory(SHM_NAME, posix_ipc.O_CREAT, mode=0o666, size=SHM_SIZE)
+mm  = mmap.mmap(shm.fd, SHM_SIZE)
+shm.close_fd()  # fd is no longer needed once the mapping is established
 
-# If abs(dx) <= STILL_THRESH_PX and abs(dy) <= STILL_THRESH_PX
-# for STILL_CONFIRM_FRAMES, treat as STILL
-STILL_THRESH_PX = 5
-STILL_CONFIRM_FRAMES = 2
+# ── Open / create named semaphores ────────────────────────────────────────────
+# initial_value=0 means "not ready"; O_CREAT is ignored for existing semaphores.
+sem_py_cpp = posix_ipc.Semaphore(SEM_PY_CPP, posix_ipc.O_CREAT, mode=0o666, initial_value=0)
+sem_cpp_py = posix_ipc.Semaphore(SEM_CPP_PY, posix_ipc.O_CREAT, mode=0o666, initial_value=0)
 
-# Print coordinates
-PRINT_INTERVAL = 0.05   # seconds
-last_print_t = 0.0
+print(f"[pysvc] IPC ready  shm={SHM_NAME}", flush=True)
 
-# Tracking state
-missing_count = 0
-MAX_MISSING_TO_FORCE_ACCEPT = 3
-AREA_GAIN_THRESHOLD = 1.3
+# ─────────────────────────────────────────────────────────────────────────────
+# Low-level accessors
+# mm[offset] returns an int in Python 3; avoids the seek-position race that
+# would affect the paired seek() + read_byte() approach under threading.
+# ─────────────────────────────────────────────────────────────────────────────
 
-def green_mask_hsv(frame_bgr):
-    hsv = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2HSV)
+def _rb(offset: int) -> int:
+    return mm[offset]
 
-    lower1 = np.array([35, 60, 60], dtype=np.uint8)
-    upper1 = np.array([85, 255, 255], dtype=np.uint8)
+def _wb(offset: int, value: int) -> None:
+    mm[offset] = value & 0xFF
 
-    mask = cv2.inRange(hsv, lower1, upper1)
+def _send_py(data: int) -> None:
+    """Write py_data (offset 1) then set py_ready flag (offset 0)."""
+    _wb(1, data)  # write data before flag — mirrors __sync_synchronize() in C++
+    _wb(0, 1)
 
-    kernel = np.ones((5, 5), np.uint8)
-    mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel, iterations=1)
-    mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel, iterations=2)
-    return mask
+def _consume_cpp() -> int:
+    """Read cpp_data (offset 3) then clear cpp_ready flag (offset 2)."""
+    val = _rb(3)
+    _wb(2, 0)
+    return val
 
-def detect_green_puck_center(frame_bgr):
-    # Returns puck center (cx, cy) from the largest green contour
-    # and returns the area of that contour
-    h, w = frame_bgr.shape[:2]
-    mask = green_mask_hsv(frame_bgr)
+def _cpp_ready() -> bool:
+    return _rb(2) != 0
 
-    contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-    if not contours:
-        return None, 0
+# ─────────────────────────────────────────────────────────────────────────────
+# Receive Method 1 — Polling
+# Sleeps 1 ms between flag checks. Low CPU cost; ~1 ms latency floor.
+# ─────────────────────────────────────────────────────────────────────────────
+def poll_receive() -> int:
+    while g_running:
+        if _cpp_ready():
+            return _consume_cpp()
+        time.sleep(0.001)
+    return 0
 
-    c = max(contours, key=cv2.contourArea)
-    area = cv2.contourArea(c)
-    if area < MIN_AREA:
-        return None, 0
+# ─────────────────────────────────────────────────────────────────────────────
+# Receive Method 2 — Spin (busy-wait)
+# Loops with no sleep. Lowest possible latency; consumes a full CPU core.
+# ─────────────────────────────────────────────────────────────────────────────
+def spin_receive() -> int:
+    while g_running and not _cpp_ready():
+        pass
+    return _consume_cpp()
 
-    M = cv2.moments(c)
-    if M["m00"] == 0:
-        return None, 0
+# ─────────────────────────────────────────────────────────────────────────────
+# Receive Method 3 — Non-blocking semaphore (trywait + yield)
+# acquire(timeout=0) returns immediately — raises BusyError if count is 0.
+# Equivalent to sem_trywait in C++.
+# ─────────────────────────────────────────────────────────────────────────────
+def semaphore_nonblocking_receive() -> int:
+    while g_running:
+        try:
+            sem_cpp_py.acquire(timeout=0)   # non-blocking; raises BusyError if not ready
+            return _consume_cpp()
+        except posix_ipc.BusyError:
+            pass                            # not ready — yield implicitly and retry
+    return 0
 
-    cx = int(M["m10"] / M["m00"])
-    cy = int(M["m01"] / M["m00"])
+# ── Writer thread: send a counter byte to cppsvc every 500 ms ─────────────────
+def _writer() -> None:
+    counter = 0
+    while g_running:
+        _send_py(counter)
+        sem_py_cpp.release()
+        print(f"[pysvc] SENT        byte={counter}", flush=True)
+        counter = (counter + 1) % 256
+        time.sleep(0.5)
 
-    cx = int(np.clip(cx, 0, w - 1))
-    cy = int(np.clip(cy, 0, h - 1))
+writer_thread = threading.Thread(target=_writer, daemon=True)
+writer_thread.start()
 
-    return (cx, cy), area
+# ── Reader: demonstrate all three receive methods in sequence ─────────────────
+print("[pysvc] Waiting for cppsvc data (POLL)...", flush=True)
+v1 = poll_receive()
+print(f"[pysvc] POLL        received byte={v1}", flush=True)
 
-def first_border_intersection(p0, v, w, h):
-    # From point p0 moving along direction v=(vx, vy),
-    # find the first intersection with the frame borders
-    x0, y0 = float(p0[0]), float(p0[1])
-    vx, vy = float(v[0]), float(v[1])
-    eps = 1e-9
-    candidates = []
+print("[pysvc] Waiting for cppsvc data (SPIN)...", flush=True)
+v2 = spin_receive()
+print(f"[pysvc] SPIN        received byte={v2}", flush=True)
 
-    # Left wall x=0
-    if abs(vx) > eps:
-        t = (0 - x0) / vx
-        if t > 0:
-            y = y0 + t * vy
-            if 0 <= y <= (h - 1):
-                candidates.append((t, (0, int(round(y))), "left"))
+print("[pysvc] Waiting for cppsvc data (SEM NON-BLOCK)...", flush=True)
+v3 = semaphore_nonblocking_receive()
+print(f"[pysvc] SEM         received byte={v3}", flush=True)
 
-    # Right wall x=w-1
-    if abs(vx) > eps:
-        t = ((w - 1) - x0) / vx
-        if t > 0:
-            y = y0 + t * vy
-            if 0 <= y <= (h - 1):
-                candidates.append((t, (w - 1, int(round(y))), "right"))
+print("[pysvc] All three receive methods completed. Exiting.", flush=True)
+g_running = False
+writer_thread.join(timeout=1)
+mm.close()
+# Note: shm and semaphores are intentionally not unlinked here so the other
+# container can finish accessing them after this one exits.
 
-    # Top wall y=0
-    if abs(vy) > eps:
-        t = (0 - y0) / vy
-        if t > 0:
-            x = x0 + t * vx
-            if 0 <= x <= (w - 1):
-                candidates.append((t, (int(round(x)), 0), "top"))
+# ─────────────────────────────────────────────────────────────────────────────
+# Original camera / vision code — preserved below, commented out
+# ─────────────────────────────────────────────────────────────────────────────
 
-    # Bottom wall y=h-1
-    if abs(vy) > eps:
-        t = ((h - 1) - y0) / vy
-        if t > 0:
-            x = x0 + t * vx
-            if 0 <= x <= (w - 1):
-                candidates.append((t, (int(round(x)), h - 1), "bottom"))
+# import cv2
+# import numpy as np
+# import glob
 
-    if not candidates:
-        return None, None
+# def open_camera():
+#     devices = sorted(glob.glob('/dev/video*'))
+#     print(f"Found video devices: {devices}", flush=True)
+#     for dev in devices:
+#         c = cv2.VideoCapture(dev, cv2.CAP_V4L2)
+#         if c.isOpened():
+#             ret, _ = c.read()
+#             if ret:
+#                 print(f"Camera found at {dev}", flush=True)
+#                 return c
+#             c.release()
+#     raise RuntimeError(f"No working camera found. Tried: {devices}")
 
-    candidates.sort(key=lambda item: item[0])
-    _, pt, wall = candidates[0]
-    return pt, wall
+# cap = open_camera()
+# cap.set(cv2.CAP_PROP_FPS, 120)
+# cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
+# cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 360)
 
-def reflect(v, wall):
-    vx, vy = float(v[0]), float(v[1])
-    if wall in ("left", "right"):
-        return (-vx, vy)
-    if wall in ("top", "bottom"):
-        return (vx, -vy)
-    return (vx, vy)
+# frame_count = 0
+# start_time = time.time()
+# fps_display = 0
+# UPDATE_INTERVAL = 1
+# MIN_AREA = 300
+# MAX_JUMP_PX = 200
+# STILL_THRESH_PX = 5
+# STILL_CONFIRM_FRAMES = 2
+# PRINT_INTERVAL = 0.05
+# last_print_t = 0.0
+# missing_count = 0
+# MAX_MISSING_TO_FORCE_ACCEPT = 3
+# AREA_GAIN_THRESHOLD = 1.3
 
-def normalize(vx, vy, eps=1e-9):
-    mag = (vx * vx + vy * vy) ** 0.5
-    if mag < eps:
-        return 0.0, 0.0
-    return vx / mag, vy / mag
+# def green_mask_hsv(frame_bgr):
+#     hsv = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2HSV)
+#     lower1 = np.array([35, 60, 60], dtype=np.uint8)
+#     upper1 = np.array([85, 255, 255], dtype=np.uint8)
+#     mask = cv2.inRange(hsv, lower1, upper1)
+#     kernel = np.ones((5, 5), np.uint8)
+#     mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN,  kernel, iterations=1)
+#     mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel, iterations=2)
+#     return mask
 
-# Last two accepted points
-p0 = None
-p1 = None
+# def detect_green_puck_center(frame_bgr):
+#     h, w = frame_bgr.shape[:2]
+#     mask = green_mask_hsv(frame_bgr)
+#     contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+#     if not contours:
+#         return None, 0
+#     c = max(contours, key=cv2.contourArea)
+#     area = cv2.contourArea(c)
+#     if area < MIN_AREA:
+#         return None, 0
+#     M = cv2.moments(c)
+#     if M["m00"] == 0:
+#         return None, 0
+#     cx = int(np.clip(int(M["m10"] / M["m00"]), 0, w - 1))
+#     cy = int(np.clip(int(M["m01"] / M["m00"]), 0, h - 1))
+#     return (cx, cy), area
 
-# Area of the currently tracked object
-tracked_area = None
+# def first_border_intersection(p0, v, w, h):
+#     x0, y0 = float(p0[0]), float(p0[1])
+#     vx, vy = float(v[0]), float(v[1])
+#     eps = 1e-9
+#     candidates = []
+#     if abs(vx) > eps:
+#         for tx, lbl in [((0 - x0) / vx, "left"), (((w-1) - x0) / vx, "right")]:
+#             if tx > 0:
+#                 y = y0 + tx * vy
+#                 if 0 <= y <= h - 1:
+#                     candidates.append((tx, (0 if lbl == "left" else w-1, int(round(y))), lbl))
+#     if abs(vy) > eps:
+#         for ty, lbl in [((0 - y0) / vy, "top"), (((h-1) - y0) / vy, "bottom")]:
+#             if ty > 0:
+#                 x = x0 + ty * vx
+#                 if 0 <= x <= w - 1:
+#                     candidates.append((ty, (int(round(x)), 0 if lbl == "top" else h-1), lbl))
+#     if not candidates:
+#         return None, None
+#     candidates.sort(key=lambda item: item[0])
+#     _, pt, wall = candidates[0]
+#     return pt, wall
 
-# Consecutive low-motion frame count
-still_count = 0
+# def reflect(v, wall):
+#     vx, vy = float(v[0]), float(v[1])
+#     return (-vx, vy) if wall in ("left", "right") else (vx, -vy)
 
-# Track disappearance state
-prev_detected = False
+# def normalize(vx, vy, eps=1e-9):
+#     mag = (vx*vx + vy*vy) ** 0.5
+#     return (0.0, 0.0) if mag < eps else (vx/mag, vy/mag)
 
-print("Camera started.", flush=True)
+# p0 = p1 = tracked_area = None
+# still_count = 0
+# prev_detected = False
+# print("Camera started.", flush=True)
 
-try:
-    while True:
-        ret, frame = cap.read()
-        if not ret:
-            print("Failed to read frame from camera.", flush=True)
-            break
+# try:
+#     while True:
+#         ret, frame = cap.read()
+#         if not ret:
+#             print("Failed to read frame from camera.", flush=True)
+#             break
+#         h, w = frame.shape[:2]
+#         center, area = detect_green_puck_center(frame)
+#         if center is not None:
+#             cond_missing_relax = (missing_count >= MAX_MISSING_TO_FORCE_ACCEPT)
+#             missing_count = 0
+#             if p1 is None:
+#                 p1 = center; tracked_area = area
+#             else:
+#                 dx, dy = center[0]-p1[0], center[1]-p1[1]
+#                 if (dx*dx+dy*dy <= MAX_JUMP_PX**2) or \
+#                    (tracked_area and area > tracked_area*AREA_GAIN_THRESHOLD) or \
+#                    cond_missing_relax:
+#                     p0 = p1; p1 = center; tracked_area = area
+#         else:
+#             missing_count += 1
+#             if missing_count > MAX_MISSING_TO_FORCE_ACCEPT:
+#                 if prev_detected:
+#                     print("Object Disappeared", flush=True)
+#                 p0 = p1 = tracked_area = None; still_count = 0
+#         prev_detected = (p1 is not None)
+#         predicted_pt = predicted_label = None
+#         if p0 is not None and p1 is not None:
+#             vx_raw, vy_raw = p1[0]-p0[0], p1[1]-p0[1]
+#             if abs(vx_raw) <= STILL_THRESH_PX and abs(vy_raw) <= STILL_THRESH_PX:
+#                 still_count += 1
+#             else:
+#                 still_count = 0
+#             if still_count >= STILL_CONFIRM_FRAMES:
+#                 predicted_label = "STILL"; predicted_pt = p1
+#             else:
+#                 ux, uy = normalize(float(vx_raw), float(vy_raw))
+#                 intercept_pt, hit_wall = first_border_intersection(p1, (ux, uy), w, h)
+#                 if intercept_pt is not None:
+#                     predicted_pt = intercept_pt; predicted_label = "INTERCEPT"
+#                     if hit_wall in ("top", "bottom"):
+#                         v_out = reflect((ux, uy), hit_wall)
+#                         bounce_end, _ = first_border_intersection(intercept_pt, v_out, w, h)
+#                         if bounce_end is not None:
+#                             predicted_pt = bounce_end; predicted_label = "BOUNCE"
+#             now_t = time.time()
+#             if predicted_pt is not None and (now_t - last_print_t) >= PRINT_INTERVAL:
+#                 print(f"[PREDICTED {predicted_label}] x={predicted_pt[0]} y={predicted_pt[1]}", flush=True)
+#                 last_print_t = now_t
+#         frame_count += 1
+#         now = time.time()
+#         if now - start_time >= UPDATE_INTERVAL:
+#             print(f"[FPS] {frame_count/(now-start_time):.1f}", flush=True)
+#             frame_count = 0; start_time = now
+# finally:
+#     cap.release()
+#     cv2.destroyAllWindows()
 
-        h, w = frame.shape[:2]
-
-        # Detection returns center and contour area
-        center, area = detect_green_puck_center(frame)
-
-        # Update p0 and p1 using consecutive accepted detections
-        if center is not None:
-            cond_missing_relax = (missing_count >= MAX_MISSING_TO_FORCE_ACCEPT)
-            missing_count = 0
-
-            if p1 is None:
-                p1 = center
-                tracked_area = area
-            else:
-                dx = center[0] - p1[0]
-                dy = center[1] - p1[1]
-                dist2 = dx * dx + dy * dy
-
-                cond_normal_accept = (dist2 <= (MAX_JUMP_PX * MAX_JUMP_PX))
-
-                if tracked_area is None:
-                    cond_area_bigger = True
-                else:
-                    cond_area_bigger = (area > tracked_area * AREA_GAIN_THRESHOLD)
-
-                if cond_normal_accept or cond_area_bigger or cond_missing_relax:
-                    p0 = p1
-                    p1 = center
-                    tracked_area = area
-        else:
-            missing_count += 1
-
-            # Reset tracking when object is gone too long
-            if missing_count > MAX_MISSING_TO_FORCE_ACCEPT:
-                if prev_detected:
-                    print("Object Disappeared", flush=True)
-
-                p0 = None
-                p1 = None
-                tracked_area = None
-                still_count = 0
-
-        # Update detection state flag
-        prev_detected = (p1 is not None)
-
-        # Predicted results
-        intercept_pt = None
-        bounce_end = None
-        predicted_pt = None
-        predicted_label = None
-
-        if p0 is not None and p1 is not None:
-            vx_raw = p1[0] - p0[0]
-            vy_raw = p1[1] - p0[1]
-
-            # Count consecutive small-motion frames to avoid jitter
-            if abs(vx_raw) <= STILL_THRESH_PX and abs(vy_raw) <= STILL_THRESH_PX:
-                still_count += 1
-            else:
-                still_count = 0
-
-            stationary = (still_count >= STILL_CONFIRM_FRAMES)
-
-            if stationary:
-                predicted_label = "STILL"
-                predicted_pt = p1
-            else:
-                # Use normalized motion direction for intercept / bounce prediction
-                ux, uy = normalize(float(vx_raw), float(vy_raw))
-                v_dir = (ux, uy)
-
-                intercept_pt, hit_wall = first_border_intersection(p1, v_dir, w, h)
-
-                if intercept_pt is not None:
-                    predicted_pt = intercept_pt
-                    predicted_label = "INTERCEPT"
-
-                    # Only bounce if first hit is top or bottom
-                    if hit_wall in ("top", "bottom"):
-                        v_out = reflect(v_dir, hit_wall)
-                        bounce_end, _ = first_border_intersection(intercept_pt, v_out, w, h)
-                        if bounce_end is not None:
-                            predicted_pt = bounce_end
-                            predicted_label = "BOUNCE"
-
-            # Print predicted point at a limited rate
-            now_t = time.time()
-            if predicted_pt is not None and (PRINT_INTERVAL <= 0 or (now_t - last_print_t) >= PRINT_INTERVAL):
-                print(f"[PREDICTED {predicted_label}] x={predicted_pt[0]} y={predicted_pt[1]}", flush=True)
-                last_print_t = now_t
-
-        # FPS update
-        frame_count += 1
-        now = time.time()
-        if now - start_time >= UPDATE_INTERVAL:
-            fps_display = frame_count / (now - start_time)
-            print(f"[FPS] {fps_display:.1f}", flush=True)
-            frame_count = 0
-            start_time = now
-
-finally:
-    cap.release()
-    cv2.destroyAllWindows()
-
-# URL = "http://127.0.0.1:8080/ping"  # use 127.0.0.1 if network_mode: host
-
+# import urllib.request, sys
+# URL = "http://127.0.0.1:8080/ping"
 # try:
 #     with urllib.request.urlopen(URL, timeout=3) as r:
 #         body = r.read().decode("utf-8", errors="replace").strip()
