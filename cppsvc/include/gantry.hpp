@@ -125,21 +125,19 @@ public:
   [[deprecated("Work in Progress")]] bool move_diagonal(int p_mm,
                                                         bool p_direction);
 
-  // Testing
-  // enum class MotorSelect { BOTH, LOWER_ONLY, UPPER_ONLY };
-  // void rotate_motors(float p_deg, uint8_t p_lower_dir, uint8_t p_upper_dir,
-  //                    MotorSelect p_select);
-
-private:
   /**
-   * @brief Selects which motor(s) to run in rotate_both_motors.
+   * @brief Selects which motor(s) to run in rotate_motors.
    */
   enum class MotorSelect { BOTH, LOWER_ONLY, UPPER_ONLY };
 
   /**
-   * @brief Helper function that runs one or both motors concurrently on
-   * separate threads. Throws a std::runtime_error if a selected motor fails,
-   * identifying which motor failed and the original error message.
+   * @brief Runs one or both motors concurrently on separate threads. Throws a
+   * std::runtime_error if a selected motor fails, identifying which motor
+   * failed and the original error message.
+   *
+   * Exposed publicly so higher-level control code (e.g. the WASD teleop in
+   * main) can drive the motors directly in degree units without going through
+   * the millimeter-based move_x/move_y helpers.
    *
    * @param p_deg Degrees for the motor(s) to rotate.
    * @param p_lower_dir Direction for the lower motor (iSV57T::CW or
@@ -151,6 +149,7 @@ private:
   void rotate_motors(float p_deg, uint8_t p_lower_dir, uint8_t p_upper_dir,
                      MotorSelect p_select);
 
+private:
   iSV57T &m_lower_motor;
   iSV57T &m_upper_motor;
   limitSwitch &m_x_origin;
