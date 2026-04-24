@@ -14,7 +14,9 @@ FRAME_HEIGHT = 720
 
 # Run calibrate_roi_apalis.py to get these values
 ROI_X, ROI_Y, ROI_W, ROI_H = 425, 21, 779, 683
-OUTPUT_W, OUTPUT_H = 600, 765
+
+# Horizontal output
+OUTPUT_W, OUTPUT_H = 765, 600
 
 # ==============================================================================
 # TRACKING / PREDICTION SETTINGS
@@ -25,13 +27,16 @@ RELAX_JUMP_AFTER_MISSING = 5
 MAX_MISSING_FRAMES = 15
 
 STILL_THRESH_PX = 2.0
-STILL_CONFIRM_FRAMES = 5
+STILL_CONFIRM_FRAMES = 1
 DIR_ARROW_LEN = 120
 
 INTERCEPT_CHANGE_THRESH_PX = 20
-INTERCEPT_ARRIVAL_TOLERANCE_PX = 12
-
 UPDATE_INTERVAL = 1.0
+
+MOVE_START_THRESH_PX = 1
+TRACK_PAUSE_ON_MOVE_SEC = 0.0
+
+MAX_BOUNCES = 3
 
 # ==============================================================================
 # COLORS
@@ -47,12 +52,6 @@ WHITE = (255, 255, 255)
 MORPH_KERNEL = np.ones((5, 5), np.uint8)
 HSV_LOWER = np.array([35, 60, 60], dtype=np.uint8)
 HSV_UPPER = np.array([85, 255, 255], dtype=np.uint8)
-
-
-MOVE_START_THRESH_PX = 10
-TRACK_PAUSE_ON_MOVE_SEC = 0.4
-
-
 
 
 # ==============================================================================
@@ -97,7 +96,6 @@ def configure_camera(cap):
 # ==============================================================================
 def preprocess_frame(frame):
     frame = frame[ROI_Y:ROI_Y + ROI_H, ROI_X:ROI_X + ROI_W]
-    frame = cv2.rotate(frame, cv2.ROTATE_90_COUNTERCLOCKWISE)
     frame = cv2.resize(frame, (OUTPUT_W, OUTPUT_H))
     return frame
 
@@ -123,16 +121,26 @@ def detect_green_puck_center(frame_bgr):
     if area < MIN_AREA:
         return None
 
-    m = cv2.moments(contour)
-    if m["m00"] == 0:
+    moments = cv2.moments(contour)
+    if moments["m00"] == 0:
         return None
 
-    cx = int(m["m10"] / m["m00"])
-    cy = int(m["m01"] / m["m00"])
+    cx = int(moments["m10"] / moments["m00"])
+    cy = int(moments["m01"] / moments["m00"])
 
     cx = int(np.clip(cx, 0, w - 1))
     cy = int(np.clip(cy, 0, h - 1))
     return (cx, cy)
+
+
+# ==============================================================================
+# COORDINATE OUTPUT CONVERSION
+# ==============================================================================
+def to_bottom_origin_coords(pt, h):
+    if pt is None:
+        return None
+    x, y = pt
+    return (x, (h - 1) - y)
 
 
 # ==============================================================================
@@ -200,19 +208,46 @@ def first_border_intersection(p0, v, w, h):
     return pt, wall
 
 
-def estimate_eta_seconds(current_pt, target_pt, velocity_xy, fps_now, fps_fallback):
-    vx, vy = velocity_xy
-    speed_px_per_frame = math.hypot(vx, vy)
-    if speed_px_per_frame < 1e-6:
-        return None
+def trace_path_to_left(start_pt, unit_v, w, h, max_bounces=MAX_BOUNCES):
+    points = [(
+        int(np.clip(round(start_pt[0]), 0, w - 1)),
+        int(np.clip(round(start_pt[1]), 0, h - 1)),
+    )]
 
-    fps_used = fps_now if fps_now > 1.0 else fps_fallback
-    if fps_used <= 0:
-        return None
+    current_pt = (float(start_pt[0]), float(start_pt[1]))
+    current_v = (float(unit_v[0]), float(unit_v[1]))
+    eps = 1e-3
 
-    distance_px = point_distance(current_pt, target_pt)
-    speed_px_per_sec = speed_px_per_frame * fps_used
-    return distance_px / speed_px_per_sec
+    for _ in range(max_bounces + 1):
+        hit_pt, hit_wall = first_border_intersection(current_pt, current_v, w, h)
+        if hit_pt is None:
+            return None, None
+
+        hit_pt = (
+            int(np.clip(hit_pt[0], 0, w - 1)),
+            int(np.clip(hit_pt[1], 0, h - 1)),
+        )
+
+        if hit_pt != points[-1]:
+            points.append(hit_pt)
+        else:
+            return None, None
+
+        # Success condition: final target is left wall
+        if hit_wall == "left":
+            return points, hit_pt
+
+        # Only top and bottom are bounce walls
+        if hit_wall not in ("top", "bottom"):
+            return None, None
+
+        current_v = reflect(current_v, hit_wall)
+        current_pt = (
+            hit_pt[0] + current_v[0] * eps,
+            hit_pt[1] + current_v[1] * eps,
+        )
+
+    return None, None
 
 
 # ==============================================================================
@@ -240,12 +275,11 @@ def create_kalman():
 # MAIN
 # ==============================================================================
 def main():
-    
     tracking_paused_until = 0.0
     was_moving = False
 
     cap = open_camera()
-    _, _, actual_camera_fps = configure_camera(cap)
+    configure_camera(cap)
 
     kalman = create_kalman()
     kalman_initialized = False
@@ -257,15 +291,12 @@ def main():
     missing_count = 0
     still_count = 0
 
-    last_intercept_pt = None
-    last_bounce_end = None
+    last_path_points = []
+    last_left_target = None
+    last_reported_left_target = None
 
-    active_intercept_target = None
-    active_intercept_started_at = None
-    active_intercept_arrived = False
-
-    cv2.namedWindow("RoboMallet Apalis", cv2.WINDOW_NORMAL)
-    cv2.resizeWindow("RoboMallet Apalis", OUTPUT_W, OUTPUT_H)
+    cv2.namedWindow("RoboMallet Apalis Horizontal", cv2.WINDOW_NORMAL)
+    cv2.resizeWindow("RoboMallet Apalis Horizontal", OUTPUT_W, OUTPUT_H)
 
     while True:
         ret, raw_frame = cap.read()
@@ -282,9 +313,6 @@ def main():
             kalman = create_kalman()
             kalman_initialized = False
             still_count = 0
-            active_intercept_target = None
-            active_intercept_started_at = None
-            active_intercept_arrived = False
 
         predicted = kalman.predict()
         pred_x = float(predicted[0][0])
@@ -335,6 +363,7 @@ def main():
 
         filtered_pos = None
         filtered_vel = None
+        dir_tip = None
 
         if kalman_initialized:
             filtered_x = float(kalman.statePost[0][0])
@@ -348,11 +377,6 @@ def main():
             )
             filtered_vel = (filtered_vx, filtered_vy)
 
-        intercept_pt = last_intercept_pt
-        bounce_end = last_bounce_end
-        dir_tip = None
-
-        # Debug border
         cv2.line(frame, (0, 0), (w - 1, 0), WHITE, 1)
         cv2.line(frame, (0, h - 1), (w - 1, h - 1), WHITE, 1)
         cv2.line(frame, (0, 0), (0, h - 1), WHITE, 1)
@@ -370,14 +394,8 @@ def main():
 
             moving_now = abs(vx) > MOVE_START_THRESH_PX or abs(vy) > MOVE_START_THRESH_PX
 
-            # Detect movement start once, then pause intercept tracking for a short time
             if moving_now and not was_moving:
                 tracking_paused_until = time.time() + TRACK_PAUSE_ON_MOVE_SEC
-                active_intercept_target = None
-                active_intercept_started_at = None
-                active_intercept_arrived = False
-                last_intercept_pt = None
-                last_bounce_end = None
 
             was_moving = moving_now
 
@@ -386,23 +404,7 @@ def main():
             else:
                 still_count = 0
 
-            # While paused, do not calculate intercepts and do not print intercept logs
-            if time.time() < tracking_paused_until:
-                intercept_pt = None
-                bounce_end = None
-                last_intercept_pt = None
-                last_bounce_end = None
-
-            elif still_count >= STILL_CONFIRM_FRAMES:
-                intercept_pt = None
-                bounce_end = None
-                last_intercept_pt = None
-                last_bounce_end = None
-
-                active_intercept_target = None
-                active_intercept_started_at = None
-                active_intercept_arrived = False
-            else:
+            if time.time() >= tracking_paused_until and still_count < STILL_CONFIRM_FRAMES:
                 ux, uy = normalize(vx, vy)
 
                 tip_x = int(round(filtered_pos[0] + DIR_ARROW_LEN * ux))
@@ -412,73 +414,39 @@ def main():
                     int(np.clip(tip_y, 0, h - 1)),
                 )
 
-                intercept_pt, hit_wall = first_border_intersection(filtered_pos, (ux, uy), w, h)
-                bounce_end = None
-
-                if intercept_pt is not None and hit_wall in ("left", "right"):
-                    reflected_v = reflect((ux, uy), hit_wall)
-                    bounce_end, _ = first_border_intersection(intercept_pt, reflected_v, w, h)
-
-                last_intercept_pt = intercept_pt
-                last_bounce_end = bounce_end
-
-                if intercept_pt is not None:
-                    is_new_target = (
-                        active_intercept_target is None
-                        or point_distance(intercept_pt, active_intercept_target) > INTERCEPT_CHANGE_THRESH_PX
+                if abs(ux) > 0.0 or abs(uy) > 0.0:
+                    path_points, left_target = trace_path_to_left(
+                        filtered_pos,
+                        (ux, uy),
+                        w,
+                        h,
+                        max_bounces=MAX_BOUNCES,
                     )
 
-                    if is_new_target:
-                        eta_s = estimate_eta_seconds(
-                            filtered_pos,
-                            intercept_pt,
-                            filtered_vel,
-                            fps_display,
-                            actual_camera_fps,
-                        )
+                    if path_points is not None and left_target is not None:
+                        last_path_points = path_points
+                        last_left_target = left_target
 
-                        active_intercept_target = intercept_pt
-                        active_intercept_started_at = time.time()
-                        active_intercept_arrived = False
-
-                        if eta_s is None:
-                            print(f"[INTERCEPT START] target={intercept_pt}", flush=True)
-                        else:
-                            print(f"[INTERCEPT START] target={intercept_pt} eta={eta_s:.3f}s", flush=True)
-                else:
-                    active_intercept_target = None
-                    active_intercept_started_at = None
-                    active_intercept_arrived = False
-
-        if (
-            time.time() >= tracking_paused_until
-            and filtered_pos is not None
-            and active_intercept_target is not None
-            and not active_intercept_arrived
-        ):
-            if point_distance(filtered_pos, active_intercept_target) <= INTERCEPT_ARRIVAL_TOLERANCE_PX:
-                elapsed = None
-                if active_intercept_started_at is not None:
-                    elapsed = time.time() - active_intercept_started_at
-
-                if elapsed is None:
-                    print(
-                        f"[INTERCEPT ARRIVED] target={active_intercept_target} puck={filtered_pos}",
-                        flush=True,
-                    )
-                else:
-                    print(
-                        f"[INTERCEPT ARRIVED] target={active_intercept_target} puck={filtered_pos} elapsed={elapsed:.3f}s",
-                        flush=True,
-                    )
-
-                active_intercept_arrived = True
+                        if (
+                            last_reported_left_target is None
+                            or point_distance(left_target, last_reported_left_target) > INTERCEPT_CHANGE_THRESH_PX
+                        ):
+                            left_target_out = to_bottom_origin_coords(left_target, h)
+                            print(
+                                f"[LEFT TARGET] x={left_target_out[0]} y={left_target_out[1]}",
+                                flush=True,
+                            )
+                            last_reported_left_target = left_target
+                    else:
+                        # No valid left-wall final target for current direction
+                        pass
 
         if filtered_pos is not None:
+            filtered_pos_out = to_bottom_origin_coords(filtered_pos, h)
             cv2.circle(frame, filtered_pos, 7, RED, -1)
             cv2.putText(
                 frame,
-                f"kalman {filtered_pos}",
+                f"kalman {filtered_pos_out}",
                 (filtered_pos[0] + 10, filtered_pos[1] + 40),
                 cv2.FONT_HERSHEY_SIMPLEX,
                 0.5,
@@ -489,34 +457,27 @@ def main():
         if filtered_pos is not None and dir_tip is not None:
             cv2.arrowedLine(frame, filtered_pos, dir_tip, GREEN, 2, tipLength=0.25)
 
-        tracking_pause_active = time.time() < tracking_paused_until
+        if len(last_path_points) >= 2:
+            for i in range(len(last_path_points) - 1):
+                p1 = last_path_points[i]
+                p2 = last_path_points[i + 1]
+                cv2.line(frame, p1, p2, BLUE, 2)
 
-        if not tracking_pause_active and filtered_pos is not None and intercept_pt is not None:
-            cv2.line(frame, filtered_pos, intercept_pt, BLUE, 2)
-            cv2.circle(frame, intercept_pt, 8, BLUE, -1)
-            if bounce_end is None:
+            for bounce_pt in last_path_points[1:-1]:
+                cv2.circle(frame, bounce_pt, 5, BLUE, -1)
+
+            if last_left_target is not None:
+                last_left_target_out = to_bottom_origin_coords(last_left_target, h)
+                cv2.circle(frame, last_left_target, 8, BLUE, -1)
                 cv2.putText(
                     frame,
-                    f"{intercept_pt}",
-                    (intercept_pt[0] + 5, intercept_pt[1] - 5),
+                    f"{last_left_target_out}",
+                    (last_left_target[0] + 5, last_left_target[1] - 5),
                     cv2.FONT_HERSHEY_SIMPLEX,
                     0.4,
                     BLUE,
                     1,
                 )
-
-        if not tracking_pause_active and intercept_pt is not None and bounce_end is not None:
-            cv2.line(frame, intercept_pt, bounce_end, BLUE, 2)
-            cv2.circle(frame, bounce_end, 6, BLUE, -1)
-            cv2.putText(
-                frame,
-                f"{bounce_end}",
-                (bounce_end[0] + 5, bounce_end[1] + 10),
-                cv2.FONT_HERSHEY_SIMPLEX,
-                0.4,
-                BLUE,
-                1,
-            )
 
         frame_count += 1
         now = time.time()
@@ -524,14 +485,6 @@ def main():
             fps_display = frame_count / (now - fps_timer_start)
             frame_count = 0
             fps_timer_start = now
-
-            # Console FPS / PUCK status print disabled
-            # if filtered_pos is not None:
-            #     puck_str = f"PUCK: X={filtered_pos[0]:04d}, Y={filtered_pos[1]:04d}"
-            # else:
-            #     puck_str = f"PUCK: LOST (Missing: {missing_count:02d})"
-            #
-            # print(f"Live FPS: {fps_display:.1f}  |  {puck_str}", flush=True)
 
         cv2.putText(
             frame,
@@ -554,7 +507,7 @@ def main():
                 1,
             )
 
-        cv2.imshow("RoboMallet Apalis", frame)
+        cv2.imshow("RoboMallet Apalis Horizontal", frame)
 
         if cv2.waitKey(1) == 27:
             break

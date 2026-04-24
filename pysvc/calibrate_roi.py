@@ -2,7 +2,7 @@ import cv2
 import glob
 import sys
 
-CAPTURE_W, CAPTURE_H = 2560, 720
+CAPTURE_W, CAPTURE_H = 1344, 376
 
 def open_camera():
     if sys.platform == 'darwin':
@@ -48,9 +48,9 @@ else:
 
 cap.release()
 
-# if not ret or frame is None:
-#     print("Could not read frame from camera")
-#     exit(1)
+if not ret or frame is None:
+    print("Could not read frame from camera")
+    exit(1)
 
 roi = cv2.selectROI("Draw box around table, press ENTER", frame, fromCenter=False, showCrosshair=True)
 cv2.destroyAllWindows()
