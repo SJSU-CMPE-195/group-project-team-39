@@ -1,5 +1,14 @@
 #include "iSV57T.hpp"
 
+#include <cerrno>
+#include <chrono>
+#include <cmath>
+#include <cstdint>
+#include <cstring>
+#include <stdexcept>
+#include <string>
+#include <thread>
+
 iSV57T::iSV57T(gpiod_chip *p_chip, unsigned p_dir_line, unsigned p_pul_line,
                uint16_t p_pulse_per_rev)
     : m_pulse_per_rev(p_pulse_per_rev) {
@@ -83,9 +92,10 @@ void iSV57T::rotate(uint8_t p_direction, float p_degree) {
 
   const uint32_t low_us = period_us - pulse_high_us;
 
-  const auto high_dur =
-      std::chrono::microseconds(static_cast<long long>(std::llround(pulse_high_us)));
-  const auto low_dur = std::chrono::microseconds(static_cast<long long>(low_us));
+  const auto high_dur = std::chrono::microseconds(
+      static_cast<long long>(std::llround(pulse_high_us)));
+  const auto low_dur =
+      std::chrono::microseconds(static_cast<long long>(low_us));
 
   auto next = std::chrono::steady_clock::now();
   for (long i = 0; i < pulses; ++i) {
