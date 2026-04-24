@@ -2,50 +2,9 @@ import cv2
 import math
 import numpy as np
 import time
-import threading
-from http.server import BaseHTTPRequestHandler, HTTPServer
-
-# Shared latest annotated frame for the MJPEG stream
-_stream_frame = None
-_stream_lock = threading.Lock()
-
-class _StreamHandler(BaseHTTPRequestHandler):
-    def do_GET(self):
-        if self.path == "/ping":
-            self.send_response(200)
-            self.end_headers()
-            self.wfile.write(b"pong")
-        elif self.path in ("/", "/stream"):
-            self.send_response(200)
-            self.send_header("Content-Type", "multipart/x-mixed-replace; boundary=frame")
-            self.end_headers()
-            try:
-                while True:
-                    with _stream_lock:
-                        frame = _stream_frame
-                    if frame is None:
-                        time.sleep(0.05)
-                        continue
-                    _, jpg = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, 70])
-                    data = jpg.tobytes()
-                    self.wfile.write(b"--frame\r\nContent-Type: image/jpeg\r\n\r\n" + data + b"\r\n")
-            except (BrokenPipeError, ConnectionResetError):
-                pass
-        else:
-            self.send_response(404)
-            self.end_headers()
-
-    def log_message(self, *_):
-        pass  # suppress access logs
-
-threading.Thread(
-    target=lambda: HTTPServer(("0.0.0.0", 8080), _StreamHandler).serve_forever(),
-    daemon=True,
-).start()
-print("Stream live at http://<apalis-ip>:8080/stream", flush=True)
 
 # Must match calibrate_roi.py CAPTURE resolution so ROI coords line up
-CAPTURE_W, CAPTURE_H = 1280, 720
+CAPTURE_W, CAPTURE_H = 720, 1080
 OUTPUT_W,  OUTPUT_H  = 540, 960   # vertical (portrait) — width x height after rotate
 
 cap = cv2.VideoCapture(0)
@@ -57,15 +16,16 @@ actual_w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
 actual_h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
 print(f"[INFO] Camera resolution: {actual_w}x{actual_h}", flush=True)
 
-# From calibrate_roi.py — ROI is in 1280x720 space
-ROI_X, ROI_Y, ROI_W, ROI_H = 257, 143, 780, 411
+ROI_X, ROI_Y, ROI_W, ROI_H = 251, 1, 889, 717
+
+OUTPUT_W, OUTPUT_H = 600, 765   # portrait space after rotate: width x height
 
 frame_count = 0
 start_time = time.time()
 fps_display = 0
 UPDATE_INTERVAL = 1
 
-# All thresholds are relative to OUTPUT size (960x540), not raw capture
+# All thresholds are relative to OUTPUT size, not raw capture
 SCALE = OUTPUT_W / 640.0
 
 MIN_AREA = int(300 * SCALE * SCALE)
@@ -190,7 +150,7 @@ def create_kalman():
     kf = cv2.KalmanFilter(4, 2)
 
     # Measurement extracts x, y from state [x, y, vx, vy]
-    kf.measurementMatrix = np.eye(2, 4, dtype=np.float32)
+    kf.measurementMatrix = np.eye(2,callable 4, dtype=np.float32)
 
     # Constant-velocity model: new_pos = old_pos + velocity
     kf.transitionMatrix = np.array([
@@ -220,9 +180,9 @@ while True:
     if not ret:
         break
 
-    # Crop to table ROI, resize, then rotate to portrait
-    # All coordinates (puck, intercept, bounce) are in OUTPUT_W x OUTPUT_H space
-    frame = cv2.resize(frame[ROI_Y:ROI_Y + ROI_H, ROI_X:ROI_X + ROI_W], (OUTPUT_H, OUTPUT_W))
+    # Crop → resize → rotate to portrait (600x765)
+    frame = frame[ROI_Y:ROI_Y + ROI_H, ROI_X:ROI_X + ROI_W]
+    frame = cv2.resize(frame, (OUTPUT_H, OUTPUT_W))
     frame = cv2.rotate(frame, cv2.ROTATE_90_COUNTERCLOCKWISE)
 
     h, w = frame.shape[:2]
@@ -419,9 +379,6 @@ while True:
     if missing_count > 0:
         cv2.putText(frame, f"missing={missing_count}", (20, 105),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.7, GREEN, 2)
-
-    with _stream_lock:
-        _stream_frame = frame.copy()
 
     cv2.imshow("RoboMallet", frame)
 
