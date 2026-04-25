@@ -8,8 +8,8 @@
 /**
  * @brief The interface for the gantry system
  */
-static constexpr int GANTRY_X_MAX_LENGTH = 863; // In millimeters TODO
-static constexpr int GANTRY_Y_MAX_LENGTH = 1;   // In millimeters TODO
+static constexpr int GANTRY_X_MAX_LENGTH = 869; // In millimeters (34.25 inches = 869.95 mm)
+static constexpr int GANTRY_Y_MAX_LENGTH = 901;   // In millimeters (35.5 inches = 901.7 mm)
 static constexpr int GANTRY_X_MAX_ROTATIONS =
     7900; // West-East from play side POV; Units in degrees TODO
 static constexpr int GANTRY_Y_MAX_ROTATIONS =
@@ -40,6 +40,12 @@ public:
    */
   gantry(iSV57T &p_lower_motor, iSV57T &p_upper_motor, limitSwitch &p_x_origin,
          limitSwitch &p_y_origin);
+
+  /**
+   * @brief Moves the gantry to a rest point by first homing to origin,
+   * then moving to the center X position while staying at Y = 0.
+   */
+   bool move_to_rest_point();
 
   /**
    * @brief TODO
@@ -125,11 +131,19 @@ public:
   [[deprecated("Work in Progress")]] bool move_diagonal(int p_mm,
                                                         bool p_direction);
 
+    enum class MotorSelect { BOTH, LOWER_ONLY, UPPER_ONLY };
+    void rotate_motors(float p_deg, uint8_t p_lower_dir, uint8_t p_upper_dir,
+                      MotorSelect p_select);
+    
+    int curr_x;
+    int curr_y;
+
+
 private:
   /**
    * @brief Selects which motor(s) to run in rotate_both_motors.
    */
-  enum class MotorSelect { BOTH, LOWER_ONLY, UPPER_ONLY };
+  //enum class MotorSelect { BOTH, LOWER_ONLY, UPPER_ONLY };
 
   /**
    * @brief Helper function that runs one or both motors concurrently on
@@ -143,8 +157,8 @@ private:
    * iSV57T::CCW).
    * @param p_select Selects which motor(s) to run. Defaults to BOTH.
    */
-  void rotate_motors(float p_deg, uint8_t p_lower_dir, uint8_t p_upper_dir,
-                     MotorSelect p_select);
+//   void rotate_motors(float p_deg, uint8_t p_lower_dir, uint8_t p_upper_dir,
+//                      MotorSelect p_select);
 
   iSV57T &m_lower_motor;
   iSV57T &m_upper_motor;
@@ -152,6 +166,6 @@ private:
   limitSwitch &m_y_origin; // Pin 17
 
   // Let's deal with whole numbers for simiplicity
-  int curr_x;
-  int curr_y;
+//   int curr_x;
+//   int curr_y;
 };

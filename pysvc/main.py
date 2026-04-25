@@ -14,15 +14,23 @@ import sys
 REQUEST_W = 640
 REQUEST_H = 480
 
-# Physical table dimensions in millimeters
-TABLE_W_MM = 1066.8
-TABLE_H_MM = 990.6
+# Old crop-based setup disabled
+# SOURCE_W = 2560
+# SOURCE_H = 720
+# ROI_X, ROI_Y, ROI_W, ROI_H = 1707, 26, 806, 675
 
-# Allowed robot-side Y range in millimeters
+# Physical table dimensions in millimeters
+TABLE_W_MM = 869
+TABLE_H_MM = 901
+
+# TABLE_W_MM = 1066.8
+# TABLE_H_MM = 990.6
+
+# Allowed robot-side X range in millimeters
 # If an INTERCEPT or BOUNCE target falls outside this range,
 # Python will label it as OUT_OF_RANGE so C++ will not move.
-ROBOT_Y_MIN_MM = 247.75
-ROBOT_Y_MAX_MM = 743.25
+ROBOT_X_MIN_MM = 100.0
+ROBOT_X_MAX_MM = 769.0
 
 
 def open_camera():
@@ -43,6 +51,13 @@ def open_camera():
     raise RuntimeError(f"No working camera found. Tried: {devices}")
 
 
+def preprocess_frame(frame):
+    # Crop disabled: use the full 640x480 frame directly
+    # cropped = frame[ROI_Y:ROI_Y + ROI_H, ROI_X:ROI_X + ROI_W]
+    # return cropped
+    return frame
+
+
 # Open the camera and request the desired frame rate / resolution
 cap = open_camera()
 cap.set(cv2.CAP_PROP_FPS, 120)
@@ -52,20 +67,15 @@ cap.set(cv2.CAP_PROP_FRAME_HEIGHT, REQUEST_H)
 # Read the actual resolution returned by the camera
 actual_w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
 actual_h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-print(f"[INFO] Camera resolution: {actual_w}x{actual_h}", flush=True)
+
+# Old crop-based prints disabled
+# print(f"[INFO] Camera source resolution: {actual_source_w}x{actual_source_h}", flush=True)
+# print(f"[INFO] ROI: x={ROI_X} y={ROI_Y} w={ROI_W} h={ROI_H}", flush=True)
+# print(f"[INFO] Cropped output resolution: {ROI_W}x{ROI_H}", flush=True)
 
 # Fixed pixel-to-mm conversion for 640x480
-# x-axis: 1066.8 / 640 = 1.667 mm/px
-# y-axis: 990.6 / 480 = 2.064 mm/px
-MM_PER_PX_X = 1066.8 / 640.0
-MM_PER_PX_Y = 990.6 / 480.0
-print(f"[INFO] MM_PER_PX_X={MM_PER_PX_X:.6f} MM_PER_PX_Y={MM_PER_PX_Y:.6f}", flush=True)
-
-# FPS tracking variables
-frame_count = 0
-start_time = time.time()
-fps_display = 0
-UPDATE_INTERVAL = 1
+MM_PER_PX_X = TABLE_W_MM / REQUEST_W
+MM_PER_PX_Y = TABLE_H_MM / REQUEST_H
 
 # Scale some thresholds using actual delivered resolution
 SCALE_X = actual_w / REQUEST_W
@@ -78,13 +88,6 @@ MIN_AREA = max(1, int(300 * SCALE_AREA))
 MAX_JUMP_PX = max(1, int(200 * SCALE_JUMP))
 STILL_THRESH_PX = 8.0 * SCALE_JUMP
 STILL_CONFIRM_FRAMES = 5
-
-# Console print timing
-PRINT_INTERVAL = 1
-last_print_t = 0.0
-
-VEL_PRINT_INTERVAL = 0.25
-last_vel_print_t = 0.0
 
 # Shared memory configuration
 SHM_NAME = "puck_xy_mm"
@@ -99,9 +102,8 @@ F64 = struct.Struct("<d")
 KIND_NONE = 0
 KIND_STILL = 1
 KIND_INTERCEPT = 2
-KIND_BOUNCE = 3
-KIND_RIGHT_SIDE = 4
-KIND_OUT_OF_RANGE = 5
+KIND_TOP_SIDE = 3
+KIND_NO_TRACK = 4
 
 # Tracking tolerances
 MAX_MISSING_FRAMES = 15
@@ -119,10 +121,8 @@ def chmod_shm():
     # Make the shared memory object read/write for both containers
     try:
         os.chmod(SHM_PATH, 0o666)
-        st = os.stat(SHM_PATH)
-        print(f"[INFO] shm permissions set to {oct(st.st_mode & 0o777)} on {SHM_PATH}", flush=True)
-    except Exception as e:
-        print(f"[WARN] Failed to chmod {SHM_PATH}: {e}", flush=True)
+    except Exception:
+        pass
 
 
 # Create or attach to shared memory
@@ -147,8 +147,6 @@ except FileExistsError:
 # Sequence counter used to mark stable writes
 py_seq = 0
 
-py_seq = 0
-
 
 def close_shm():
     # Cleanly close and unlink shared memory on exit
@@ -163,7 +161,7 @@ def close_shm():
 
 
 def handle_exit(signum, frame):
-    print(f"[INFO] Caught signal {signum}, cleaning up...", flush=True)
+    # Handle Ctrl+C / container stop more cleanly
     try:
         close_shm()
     except Exception:
@@ -173,6 +171,7 @@ def handle_exit(signum, frame):
     except Exception:
         pass
     sys.exit(0)
+
 
 atexit.register(close_shm)
 signal.signal(signal.SIGINT, handle_exit)
@@ -200,12 +199,10 @@ def kind_from_label(label):
         return KIND_STILL
     if label == "INTERCEPT":
         return KIND_INTERCEPT
-    if label == "BOUNCE":
-        return KIND_BOUNCE
-    if label == "RIGHT_SIDE":
-        return KIND_RIGHT_SIDE
-    if label == "OUT_OF_RANGE":
-        return KIND_OUT_OF_RANGE
+    if label == "TOP_SIDE":
+        return KIND_TOP_SIDE
+    if label == "NO_TRACK":
+        return KIND_NO_TRACK
     return KIND_NONE
 
 
@@ -239,9 +236,15 @@ def publish_coordinate(kind, x_mm, y_mm):
 
 def px_to_mm(pt):
     # Convert a pixel coordinate into millimeters
+    # using bottom-right as the physical origin.
     if pt is None:
         return None
-    return (pt[0] * MM_PER_PX_X, pt[1] * MM_PER_PX_Y)
+
+    # x_mm = distance from right edge
+    # y_mm = distance from bottom edge
+    x_mm = (REQUEST_W - 1 - pt[0]) * MM_PER_PX_X
+    y_mm = (REQUEST_H - 1 - pt[1]) * MM_PER_PX_Y
+    return (x_mm, y_mm)
 
 
 def green_mask_hsv(frame_bgr):
@@ -375,26 +378,33 @@ kalman_initialized = False
 missing_count = 0
 still_count = 0
 
-print("Camera started.", flush=True)
-
 try:
     while True:
-        ret, frame = cap.read()
+        ret, raw_frame = cap.read()
         if not ret:
-            print("Failed to read frame from camera.", flush=True)
             break
 
+        # Crop before any detection/tracking
+        frame = preprocess_frame(raw_frame)
         h, w = frame.shape[:2]
 
         # Detect puck center from current frame
         center, area = detect_green_puck_center(frame)
 
         # If too many frames were missed, reset the Kalman tracker
+        # and notify C++ that tracking was lost so it can move to rest point.
         if missing_count >= MAX_MISSING_FRAMES and kalman_initialized:
-            print(f"[INFO] Lost track after {missing_count} missing frames - resetting Kalman", flush=True)
             kalman = create_kalman()
             kalman_initialized = False
             still_count = 0
+
+            if cxx_requested_next():
+                print("[PY->C++] kind=NO_TRACK x_mm=0.0 y_mm=0.0", flush=True)
+                publish_coordinate(
+                    kind_from_label("NO_TRACK"),
+                    0.0,
+                    0.0
+                )
 
         # Predict next state
         predicted = kalman.predict()
@@ -431,13 +441,6 @@ try:
                     missing_count = 0
                 else:
                     missing_count += 1
-                    if missing_count % 5 == 1:
-                        print(
-                            f"[WARN] Rejected measurement at {center}, "
-                            f"pred=({pred_x:.0f},{pred_y:.0f}), "
-                            f"jump={dist2**0.5:.0f}px > {effective_jump}px",
-                            flush=True
-                        )
         else:
             missing_count += 1
 
@@ -503,63 +506,40 @@ try:
                     predicted_pt = intercept_pt
                     predicted_label = "INTERCEPT"
 
-                    # Only top/bottom walls generate a bounce
-                    if hit_wall in ("top", "bottom"):
+                    # Bottom-right origin: left/right walls can bounce
+                    if hit_wall in ("left", "right"):
                         v_out = reflect((ux, uy), hit_wall)
                         bounce_end, _ = first_border_intersection(intercept_pt, v_out, w, h)
                         if bounce_end is not None:
+                            # We still send the post-bounce intercept to C++
                             predicted_pt = bounce_end
-                            predicted_label = "BOUNCE"
+                            predicted_label = "INTERCEPT"
 
             # Convert chosen pixel point into millimeters
             if predicted_pt is not None:
                 predicted_mm = px_to_mm(predicted_pt)
 
-                # If point is on right border, label as opponent side
-                if predicted_pt[0] == (w - 1):
-                    predicted_label = "RIGHT_SIDE"
-                # If intercept/bounce is outside allowed robot Y range, label out of range
-                elif predicted_label in ("INTERCEPT", "BOUNCE"):
-                    if not (ROBOT_Y_MIN_MM <= predicted_mm[1] <= ROBOT_Y_MAX_MM):
-                        predicted_label = "OUT_OF_RANGE"
-
-            # Periodically print and publish the result
-            now_t = time.time()
-            if predicted_pt is not None and (PRINT_INTERVAL <= 0 or (now_t - last_print_t) >= PRINT_INTERVAL):
-                print(
-                    f"[PREDICTED {predicted_label}] "
-                    f"x={predicted_pt[0]} y={predicted_pt[1]} "
-                    f"x_mm={predicted_mm[0]:.1f} y_mm={predicted_mm[1]:.1f}",
-                    flush=True
-                )
+                # Only bottom-wall targets are usable intercepts.
+                # Top wall is opponent side, and left/right wall hits are not move targets.
+                if predicted_label == "STILL":
+                    pass
+                elif predicted_pt[1] == (h - 1):
+                    predicted_label = "INTERCEPT"
+                else:
+                    predicted_label = "TOP_SIDE"
 
                 # Only write if C++ requested a new coordinate
                 if cxx_requested_next():
+                    print(
+                        f"[PY->C++] kind={predicted_label} "
+                        f"x_mm={predicted_mm[0]:.1f} y_mm={predicted_mm[1]:.1f}",
+                        flush=True
+                    )
                     publish_coordinate(
                         kind_from_label(predicted_label),
                         predicted_mm[0],
                         predicted_mm[1]
                     )
-
-                last_print_t = now_t
-
-        # FPS update
-        frame_count += 1
-        now = time.time()
-        if now - start_time >= UPDATE_INTERVAL:
-            fps_display = frame_count / (now - start_time)
-            print(f"[FPS] {fps_display:.1f}", flush=True)
-            frame_count = 0
-            start_time = now
-
-        # Optional velocity timing block
-        if kalman_initialized and filtered_vel is not None:
-            now_t = time.time()
-            if now_t - last_vel_print_t >= VEL_PRINT_INTERVAL:
-                vx, vy = filtered_vel
-                speed = math.hypot(vx, vy)
-                # print(f"[VELOCITY] vx={vx:.2f} vy={vy:.2f} speed={speed:.2f}", flush=True)
-                last_vel_print_t = now_t
 
 finally:
     cap.release()
