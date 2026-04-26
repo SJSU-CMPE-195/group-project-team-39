@@ -91,20 +91,31 @@ int main() {
 
   std::cout << "Finished gantry object initialization!\n";
 
-  // std::cout << "Starting motor rotations...\n";
+  std::cout << "Starting motor rotations...\n";
 
   // Make the rotate_motor function public when testing.
   // Moving North
-  // g.rotate_motors(720, iSV57T::CCW, iSV57T::CW, gantry::MotorSelect::BOTH);
+  // g.rotate_motors(1440, iSV57T::CCW, iSV57T::CW, gantry::MotorSelect::BOTH);
 
   // Moving South
-  // g.rotate_motors(720, iSV57T::CW, iSV57T::CCW, gantry::MotorSelect::BOTH);
+  // g.rotate_motors(1440, iSV57T::CW, iSV57T::CCW, gantry::MotorSelect::BOTH);
 
   // Moving East
-  // g.rotate_motors(720, iSV57T::CCW, iSV57T::CCW, gantry::MotorSelect::BOTH);
+  // g.rotate_motors(1440, iSV57T::CCW, iSV57T::CCW, gantry::MotorSelect::BOTH);
 
   // Moving West
-  // g.rotate_motors(720, iSV57T::CW, iSV57T::CW, gantry::MotorSelect::BOTH);
+  // g.rotate_motors(1440, iSV57T::CW, iSV57T::CW, gantry::MotorSelect::BOTH);
+
+  // Moving Diagonally
+  // Without Limit Switches
+  // g.curr_x = 200;
+  // g.curr_y = 200;
+  // g.move_diagonal(100, 1);
+  // std::this_thread::sleep_for(std::chrono::milliseconds(500));
+  // g.move_diagonal(100, 0);
+  // g.move_diagonal(100, 2);
+  // std::this_thread::sleep_for(std::chrono::milliseconds(500));
+  // g.move_diagonal(100, 3);
 
   // Move to Origin Test
   // std::cout << "Moving to origin...\n";
@@ -113,10 +124,20 @@ int main() {
 
   // std::cout << "Finished moving to origin!\n";
 
+  // Calibration Function
+  std::cout << "Calibration testing...\n";
+  // Without Limit Switches
+  g.curr_x = 0;
+  g.curr_y = 0;
+
+  g.calibration_test();
+
+  std::cout << "Calibration Test Complete!\n";
+
   // Delay line
   // std::this_thread::sleep_for(std::chrono::milliseconds(500));
 
-  // std::cout << "Ending motor rotations...\n";
+  std::cout << "Ending motor rotations...\n";
 
   // sw1_thread.join();
   // sw2_thread.join();

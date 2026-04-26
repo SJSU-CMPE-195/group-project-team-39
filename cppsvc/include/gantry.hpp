@@ -47,6 +47,12 @@ public:
   [[deprecated("Work in Progress")]] void move_to_push();
 
   /**
+   * @brief Moves to the edges of the gantry system to see if all movement
+   * function works.
+   */
+  bool calibration_test();
+
+  /**
    * @brief Moves the center of the gantry from any point it started from to
    * origin. Will use limit switches as sensors to know when coordinate 0 in
    * both axises are hit.
@@ -55,8 +61,11 @@ public:
 
   /**
    * @brief Moves the center of the gantry system to a desired coordinate point.
-   * The coordinate grid is defined in millimeters. The function will return
-   * true if the action is completed. Otherwise, return false.
+   * The coordinate grid is defined in millimeters. If possible, the motor will
+   * move diagonally to cover the shortest distance. Than whatever is remaining,
+   * the gantry will move horizontally and/or vertically to reach its
+   * destination. The function will return true if the action is completed.
+   * Otherwise, return false.
    *
    * NOTE: The coordinate system is in units of millimeters (mm).
    *
@@ -73,9 +82,9 @@ public:
    * successfully, the function will return true. Otherwise, the function will
    * return false.
    *
-   * Both m_lower_motor and m_top_motor needs to spin in the same direction to
-   * move in this direction. Moving CLOCKWISE will move the gantry WEST. Moving
-   * COUNTER CLOCKWISE will move the gantry EAST.
+   * DETAILS: Both m_lower_motor and m_top_motor needs to spin in the same
+   * direction to move in this direction. Moving CLOCKWISE will move the gantry
+   * WEST. Moving COUNTER CLOCKWISE will move the gantry EAST.
    *
    * @param p_mm gives the amount of millimeters the gantry system should move
    * from its current position.
@@ -93,11 +102,11 @@ public:
    * successfully, the function will return true. Otherwise, the function will
    * return false.
    *
-   * The m_lower_motor and m_top_motor needs to spin in the oppposite direction
-   * to move in this direction. m_lower_motor moving in COUNTER CLOCKWISE and
-   * m_upper_motor moving in CLOCKWISE will move the gantry in the NORTH
-   * direction. m_lower_motor moving in CLOCKWISE and m_upper_motor moving in
-   * COUNTER CLOCKWISE will move the gantry in the SOUTH direction.
+   * DETAILS: The m_lower_motor and m_top_motor needs to spin in the oppposite
+   * direction to move in this direction. m_lower_motor moving in COUNTER
+   * CLOCKWISE and m_upper_motor moving in CLOCKWISE will move the gantry in the
+   * NORTH direction. m_lower_motor moving in CLOCKWISE and m_upper_motor moving
+   * in COUNTER CLOCKWISE will move the gantry in the SOUTH direction.
    *
    * @param p_mm gives the amount of millimeteres the gantry system should move
    * from its current position.
@@ -116,19 +125,28 @@ public:
    * completed successfully, the function will return true. Otherwise, the
    * function will return false.
    *
-   * One motor needs to spin at a time to move diagonally. If only m_lower_motor
-   * spins, rotating
+   * DETAILS: One motor needs to spin at a time to move diagonally. If only
+   * rotating the m_upper_motor Clockwise, the gantry moves in the NorthWest
+   * direction. If m_upper_motor is rotated Counter Clockwise, the gantry moves
+   * SouthEast. If only m_lower_motor Clockwise, the gantry moves in the
+   * SouthWest direction. If the m_lower_motor moves Counter Clockwise, the
+   * gantry moves in the NorthEast direction.
    *
-   * @param p_mm TODO
-   * @param p_direction TODO
+   * @param p_mm gives the amount of millimeters the gantry system should move
+   * diagonally from its current position.
+   * @param p_direction gives the diagonal direction the gantry should move.
+   * There are 4 values that p_direction can be: 0 - move in the SouthEast
+   * direction, 1 - move in the NorthWest direction, 2 - move in the SouthWest
+   * direction, 3 - move in the NorthEast direction.
    */
-  [[deprecated("Work in Progress")]] bool move_diagonal(int p_mm,
-                                                        bool p_direction);
+  bool move_diagonal(int p_mm, uint8_t p_direction);
 
-  // Testing
+  // Testing Purposes; Uncomment if you want to use raw motor movement function
   // enum class MotorSelect { BOTH, LOWER_ONLY, UPPER_ONLY };
   // void rotate_motors(float p_deg, uint8_t p_lower_dir, uint8_t p_upper_dir,
   //                    MotorSelect p_select);
+  // int curr_x;
+  // int curr_y;
 
 private:
   /**
