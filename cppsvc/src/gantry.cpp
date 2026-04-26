@@ -9,6 +9,8 @@
 #include <stdexcept>
 #include <string>
 #include <thread>
+#include <algorithm>
+#include <exception>
 
 // Private Functions
 void gantry::rotate_motors(float p_deg, uint8_t p_lower_dir,
@@ -194,29 +196,7 @@ bool gantry::move_to_coord(unsigned p_x_target, unsigned p_y_target) {
   // Use diagonal movement as much as possible, then finish with axis moves.
   // Note: move_diagonal decomposes euclidean distance into integer mm deltas,
   // so we recompute the residual diffs after the diagonal move.
-  const int diag_mm = std::min(std::abs(diff_x), std::abs(diff_y));
-  if (diag_mm != 0) {
-    uint8_t diag_dir;
-    if (diff_x < 0 && diff_y < 0)      // East + South
-      diag_dir = 0;                    // SouthEast
-    else if (diff_x > 0 && diff_y > 0) // West + North
-      diag_dir = 1;                    // NorthWest
-    else if (diff_x > 0 && diff_y < 0) // West + South
-      diag_dir = 2;                    // SouthWest
-    else                               // East + North
-      diag_dir = 3;                    // NorthEast
-
-    move_diagonal(diag_mm, diag_dir);
-
-    diff_x = (int)p_x_target - curr_x;
-    diff_y = (int)p_y_target - curr_y;
-  }
-
-  if (diff_x != 0)
-    move_x((unsigned int)std::abs(diff_x), (bool)(diff_x > 0));
-  if (diff_y != 0)
-    move_y((unsigned int)std::abs(diff_y), (bool)(diff_y > 0));
-
+better_move(diff_x, diff_y);
   return true;
 }
 
@@ -335,6 +315,97 @@ bool gantry::calibration_test() {
   if (!move_to_coord(0, 0))
     return false;
   std::this_thread::sleep_for(std::chrono::milliseconds(500));
+
+  return true;
+}
+
+bool gantry::better_move(int dx, int dy) {
+  if (dx == 0 && dy == 0)
+    return true;
+
+  int new_x = curr_x + dx;
+  int new_y = curr_y + dy;
+
+  if (new_x < 0 || new_x > GANTRY_X_MAX_LENGTH ||
+      new_y < 0 || new_y > GANTRY_Y_MAX_LENGTH) {
+    throw std::runtime_error("Move goes out of bounds.");
+    return false;
+  }
+
+  int lower_mm = dx - dy;
+  int upper_mm = dx + dy;
+
+  float lower_deg = std::abs(lower_mm) * X_DEG_TO_MM;
+  float upper_deg = std::abs(upper_mm) * X_DEG_TO_MM;
+
+  uint8_t lower_dir = (lower_mm >= 0) ? iSV57T::CW : iSV57T::CCW;
+  uint8_t upper_dir = (upper_mm >= 0) ? iSV57T::CW : iSV57T::CCW;
+
+  rotate_motors_independent(lower_deg, lower_dir, upper_deg, upper_dir);
+
+  //this one function above should handle all movements (x,y,diagonal(different angles))
+  curr_x = new_x;
+  curr_y = new_y;
+
+  return true;
+}
+
+bool gantry::rotate_motors_independent(float lower_deg, uint8_t lower_dir,
+                                       float upper_deg, uint8_t upper_dir) {
+  if (lower_deg == 0.0f && upper_deg == 0.0f)
+    return true;
+
+  float max_deg = std::max(lower_deg, upper_deg);
+  if (max_deg <= 0.0f)
+    return true;
+
+//we can modify this to be how ever fast we wnat
+  const float base_rpm = 1000.0f;
+
+  float lower_rpm = 0.0f;
+  float upper_rpm = 0.0f;
+//set the rpm based on ratio of how many degrees each motor's gotta move
+  if (lower_deg > 0.0f)
+    lower_rpm = base_rpm * (lower_deg / max_deg);
+  if (upper_deg > 0.0f)
+    upper_rpm = base_rpm * (upper_deg / max_deg);
+
+//technically we can set the lower rpm limit to 0 but it's ok
+  if (lower_deg > 0.0f)
+    lower_rpm = std::clamp(lower_rpm, 0.0f, 3000.0f);
+  if (upper_deg > 0.0f)
+    upper_rpm = std::clamp(upper_rpm, 0.0f, 3000.0f);
+
+  if (lower_deg > 0.0f)
+    m_lower_motor.set_target_rpm(lower_rpm);
+  if (upper_deg > 0.0f)
+    m_upper_motor.set_target_rpm(upper_rpm);
+
+  std::exception_ptr eptr = nullptr;
+
+  std::thread lower_thread([&]() {
+    try {
+      if (lower_deg > 0.0f)
+        m_lower_motor.rotate(lower_dir, lower_deg);
+    } catch (...) {
+      eptr = std::current_exception();
+    }
+  });
+
+  std::thread upper_thread([&]() {
+    try {
+      if (upper_deg > 0.0f)
+        m_upper_motor.rotate(upper_dir, upper_deg);
+    } catch (...) {
+      eptr = std::current_exception();
+    }
+  });
+
+  lower_thread.join();
+  upper_thread.join();
+
+  if (eptr)
+    std::rethrow_exception(eptr);
 
   return true;
 }

@@ -127,12 +127,12 @@ void iSV57T::set_pulse_high_us(float p_pulse_high_us) {
 }
 
 void iSV57T::set_target_rpm(float p_target_rpm) {
-  if (p_target_rpm >= 100 && p_target_rpm <= 3000)
+  if (p_target_rpm >= 0 && p_target_rpm <= 3000)
     target_rpm = p_target_rpm;
   else
     throw std::runtime_error(
         std::string("Failed to set new target RPM due to being out "
-                    "of the range of 100 to 3000 RPM. "
+                    "of the range of 0 to 3000 RPM. "
                     "Current target_rpm value is ") +
         std::to_string(target_rpm) + " RPM.");
 }

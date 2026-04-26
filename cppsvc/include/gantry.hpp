@@ -148,6 +148,8 @@ public:
   // int curr_x;
   // int curr_y;
 
+  bool better_move(int dx, int dy);
+  bool rotate_motors_independent(float lower_deg, uint8_t lower_dir, float upper_deg, uint8_t upper_dir);
 private:
   /**
    * @brief Selects which motor(s) to run in rotate_both_motors.
