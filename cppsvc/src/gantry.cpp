@@ -301,10 +301,10 @@ bool gantry::move_diagonal(int p_mm, uint8_t p_direction) {
 }
 
 bool gantry::calibration_test() {
-  // Step 1: Home to origin
-  // if (!move_to_origin())
-  //   return false;
-  // std::this_thread::sleep_for(std::chrono::milliseconds(500));
+  // Step 1 : Home to origin
+  if (!move_to_origin())
+    return false;
+  std::this_thread::sleep_for(std::chrono::milliseconds(500));
 
   // Step 2: Drive to X maximum (y = 0)
   if (!move_to_coord(GANTRY_X_MAX_LENGTH, 0))
