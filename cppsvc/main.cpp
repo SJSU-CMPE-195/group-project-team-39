@@ -26,7 +26,7 @@
 #include "limitSwitch.hpp"
 
 namespace {
-
+// hi
 std::atomic<bool> g_running{true};
 
 void on_sigint(int /*signo*/) {
