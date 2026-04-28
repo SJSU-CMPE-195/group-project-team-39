@@ -118,21 +118,21 @@ int main() {
   // g.move_diagonal(100, 3);
 
   // Move to Origin Test
-  // std::cout << "Moving to origin...\n";
+  std::cout << "Moving to origin...\n";
 
-  // g.move_to_origin();
+  g.move_to_origin();
 
-  // std::cout << "Finished moving to origin!\n";
+  std::cout << "Finished moving to origin!\n";
 
   // Calibration Function
-  std::cout << "Calibration testing...\n";
-  // Without Limit Switches
-  g.curr_x = 0;
-  g.curr_y = 0;
+  // std::cout << "Calibration testing...\n";
 
-  g.calibration_test();
+  // g.calibration_test();
 
-  std::cout << "Calibration Test Complete!\n";
+  // std::cout << "Calibration Test Complete!\n";
+
+  // Move coordinate test
+  g.move_to_coord(200, 200);
 
   // Delay line
   // std::this_thread::sleep_for(std::chrono::milliseconds(500));

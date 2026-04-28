@@ -1,16 +1,16 @@
 #include "gantry.hpp"
 
+#include <algorithm>
 #include <cerrno>
 #include <chrono>
 #include <cmath>
 #include <cstdint>
 #include <cstring>
+#include <exception>
 #include <gpiod.h>
 #include <stdexcept>
 #include <string>
 #include <thread>
-#include <algorithm>
-#include <exception>
 
 // Private Functions
 void gantry::rotate_motors(float p_deg, uint8_t p_lower_dir,
@@ -85,10 +85,10 @@ bool gantry::move_x(unsigned int p_mm, bool p_direction) {
   // Gets the direction of the motors to spin to move East/West
   if (p_direction) { // Moving West
     target_dir = iSV57T::CW;
-    new_x = curr_x + p_mm;
+    new_x = curr_x - p_mm;
   } else { // Moving East
     target_dir = iSV57T::CCW;
-    new_x = curr_x - p_mm;
+    new_x = curr_x + p_mm;
   }
 
   // Checks if moving p_mm will go beyond out gantry's boundaries
@@ -163,6 +163,7 @@ bool gantry::move_to_origin() {
     rotate_motors(HOMING_STEP_DEG, iSV57T::CW, iSV57T::CCW,
                   MotorSelect::BOTH); // Moving South
     total_y_deg += HOMING_STEP_DEG;
+    // std::cout << "Current Y-Rotations: " << total_y_deg << "\n";
   }
 
   // Phase 2: move East until m_x_origin triggers
@@ -173,9 +174,10 @@ bool gantry::move_to_origin() {
           "X-axis homing failed: limit switch not reached.");
       return false;
     }
-    rotate_motors(HOMING_STEP_DEG, iSV57T::CCW, iSV57T::CCW,
-                  MotorSelect::BOTH); // Moving East
+    rotate_motors(HOMING_STEP_DEG, iSV57T::CW, iSV57T::CW,
+                  MotorSelect::BOTH); // Moving WEST
     total_x_deg += HOMING_STEP_DEG;
+    // std::cout << "Current X-Rotations: " << total_x_deg << "\n";
   }
 
   curr_x = 0;
@@ -196,7 +198,7 @@ bool gantry::move_to_coord(unsigned p_x_target, unsigned p_y_target) {
   // Use diagonal movement as much as possible, then finish with axis moves.
   // Note: move_diagonal decomposes euclidean distance into integer mm deltas,
   // so we recompute the residual diffs after the diagonal move.
-better_move(diff_x, diff_y);
+  better_move(diff_x, diff_y);
   return true;
 }
 
@@ -217,25 +219,26 @@ bool gantry::move_diagonal(int p_mm, uint8_t p_direction) {
   case 0: // SouthEast
     motor_select = MotorSelect::UPPER_ONLY;
     upper_dir = iSV57T::CCW;
-    x_sign = -1;
+    // X increases to the East, Y increases to the North
+    x_sign = 1;
     y_sign = -1;
     break;
   case 1: // NorthWest
     motor_select = MotorSelect::UPPER_ONLY;
     upper_dir = iSV57T::CW;
-    x_sign = 1;
+    x_sign = -1;
     y_sign = 1;
     break;
   case 2: // SouthWest
     motor_select = MotorSelect::LOWER_ONLY;
     lower_dir = iSV57T::CW;
-    x_sign = 1;
+    x_sign = -1;
     y_sign = -1;
     break;
   case 3: // NorthEast
     motor_select = MotorSelect::LOWER_ONLY;
     lower_dir = iSV57T::CCW;
-    x_sign = -1;
+    x_sign = 1;
     y_sign = 1;
     break;
   default:
@@ -326,14 +329,17 @@ bool gantry::better_move(int dx, int dy) {
   int new_x = curr_x + dx;
   int new_y = curr_y + dy;
 
-  if (new_x < 0 || new_x > GANTRY_X_MAX_LENGTH ||
-      new_y < 0 || new_y > GANTRY_Y_MAX_LENGTH) {
+  if (new_x < 0 || new_x > GANTRY_X_MAX_LENGTH || new_y < 0 ||
+      new_y > GANTRY_Y_MAX_LENGTH) {
     throw std::runtime_error("Move goes out of bounds.");
     return false;
   }
 
-  int lower_mm = dx - dy;
-  int upper_mm = dx + dy;
+  // X sign convention: curr_x increases to the East. The CoreXY motor mixing
+  // below is written so that +dx produces the same motor directions as
+  // move_x().
+  int lower_mm = -dx - dy;
+  int upper_mm = -dx + dy;
 
   float lower_deg = std::abs(lower_mm) * X_DEG_TO_MM;
   float upper_deg = std::abs(upper_mm) * X_DEG_TO_MM;
@@ -343,7 +349,8 @@ bool gantry::better_move(int dx, int dy) {
 
   rotate_motors_independent(lower_deg, lower_dir, upper_deg, upper_dir);
 
-  //this one function above should handle all movements (x,y,diagonal(different angles))
+  // this one function above should handle all movements (x,y,diagonal(different
+  // angles))
   curr_x = new_x;
   curr_y = new_y;
 
@@ -359,18 +366,18 @@ bool gantry::rotate_motors_independent(float lower_deg, uint8_t lower_dir,
   if (max_deg <= 0.0f)
     return true;
 
-//we can modify this to be how ever fast we wnat
-  const float base_rpm = 1000.0f;
+  // we can modify this to be how ever fast we wnat
+  const float base_rpm = 500.0f;
 
   float lower_rpm = 0.0f;
   float upper_rpm = 0.0f;
-//set the rpm based on ratio of how many degrees each motor's gotta move
+  // set the rpm based on ratio of how many degrees each motor's gotta move
   if (lower_deg > 0.0f)
     lower_rpm = base_rpm * (lower_deg / max_deg);
   if (upper_deg > 0.0f)
     upper_rpm = base_rpm * (upper_deg / max_deg);
 
-//technically we can set the lower rpm limit to 0 but it's ok
+  // technically we can set the lower rpm limit to 0 but it's ok
   if (lower_deg > 0.0f)
     lower_rpm = std::clamp(lower_rpm, 0.0f, 3000.0f);
   if (upper_deg > 0.0f)
