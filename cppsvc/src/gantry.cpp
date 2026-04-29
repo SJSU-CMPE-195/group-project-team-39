@@ -83,10 +83,10 @@ bool gantry::move_x(unsigned int p_mm, bool p_direction) {
   // Gets the direction of the motors to spin to move East/West
   if (p_direction) { // Moving West
     target_dir = iSV57T::CW;
-    new_x = curr_x + p_mm;
+    new_x = curr_x - p_mm;
   } else { // Moving East
     target_dir = iSV57T::CCW;
-    new_x = curr_x - p_mm;
+    new_x = curr_x + p_mm;
   }
 
   // Checks if moving p_mm will go beyond out gantry's boundaries
@@ -171,8 +171,8 @@ bool gantry::move_to_origin() {
           "X-axis homing failed: limit switch not reached.");
       return false;
     }
-    rotate_motors(HOMING_STEP_DEG, iSV57T::CCW, iSV57T::CCW,
-                  MotorSelect::BOTH); // Moving East
+    rotate_motors(HOMING_STEP_DEG, iSV57T::CW, iSV57T::CW,
+                  MotorSelect::BOTH); // Moving West
     total_x_deg += HOMING_STEP_DEG;
   }
 
@@ -237,25 +237,25 @@ bool gantry::move_diagonal(int p_mm, uint8_t p_direction) {
   case 0: // SouthEast
     motor_select = MotorSelect::UPPER_ONLY;
     upper_dir = iSV57T::CCW;
-    x_sign = -1;
+    x_sign = 1;
     y_sign = -1;
     break;
   case 1: // NorthWest
     motor_select = MotorSelect::UPPER_ONLY;
     upper_dir = iSV57T::CW;
-    x_sign = 1;
+    x_sign = -1;
     y_sign = 1;
     break;
   case 2: // SouthWest
     motor_select = MotorSelect::LOWER_ONLY;
     lower_dir = iSV57T::CW;
-    x_sign = 1;
+    x_sign = -1;
     y_sign = -1;
     break;
   case 3: // NorthEast
     motor_select = MotorSelect::LOWER_ONLY;
     lower_dir = iSV57T::CCW;
-    x_sign = -1;
+    x_sign = 1;
     y_sign = 1;
     break;
   default:
