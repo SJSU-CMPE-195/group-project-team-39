@@ -104,7 +104,7 @@ RoboMallet/
 
 ### Test Configuration
 - Testing Type: Playing against robot for stress testing  
-- Duration: ~10 minutes per trial  
+- Duration: 10-15 minutes per trial  
 - Input Method: Manual puck shots (human player)  
 - Scenarios Tested:
   - Straight shots at varying speeds  
@@ -122,14 +122,14 @@ RoboMallet/
 | Max Trackable Puck Speed | 0.813 m/s |
 | Interception Success Rate | 93.5 % |
 | Avg Response Time (vision → actuation) | 21 - 81 ms |
-| Prediction Error (avg) | 15% cm |
+| Prediction Error (avg) | 15% |
 
 ---
 
 ### Observations
 - System performs reliably for straight and angled shots  
 - Performance decreases for high-speed, multi-bounce trajectories, and drift caused due to air
-- Largest bottlneck is in the transferrance of information from one process to the next
+- Largest bottleneck is in the transferance of information from one process to the next using shared memory
 - Occasional tracking loss observed during rapid consecutive shots
 
 ---
