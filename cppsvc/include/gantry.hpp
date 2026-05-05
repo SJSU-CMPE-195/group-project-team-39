@@ -11,9 +11,9 @@
 static constexpr int GANTRY_X_MAX_LENGTH = 869; // In millimeters
 static constexpr int GANTRY_Y_MAX_LENGTH = 901; // In millimeters
 static constexpr int GANTRY_X_MAX_ROTATIONS =
-    7900; // West-East from play side POV; Units in degrees
+    7925; // West-East from play side POV; Units in degrees
 static constexpr int GANTRY_Y_MAX_ROTATIONS =
-    8095; // North-South from play side POV; Units in degrees
+    8000; // North-South from play side POV; Units in degrees
 static constexpr float HOMING_STEP_DEG = 10.0f;
 static constexpr float X_DEG_TO_MM =
     float(GANTRY_X_MAX_ROTATIONS) /

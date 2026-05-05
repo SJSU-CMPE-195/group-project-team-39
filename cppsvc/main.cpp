@@ -55,8 +55,8 @@ int main() {
 
   std::cout << "Initializing limit switch objects...\n";
 
-  limitSwitch sw_y(chip4, sw1_line);
-  limitSwitch sw_x(chip4, sw2_line);
+  limitSwitch sw_x(chip4, sw1_line);
+  limitSwitch sw_y(chip4, sw2_line);
 
   std::cout << "Finished limit switch object initialization!\n";
 
@@ -118,11 +118,16 @@ int main() {
   // g.move_diagonal(100, 3);
 
   // Move to Origin Test
-  std::cout << "Moving to origin...\n";
+  // std::cout << "Moving to origin...\n";
 
   g.move_to_origin();
+  // g.move_y(GANTRY_Y_MAX_LENGTH, true);
+  // g.move_to_coord(GANTRY_X_MAX_LENGTH, GANTRY_Y_MAX_LENGTH);
+  g.move_to_coord(0, GANTRY_Y_MAX_LENGTH);
+  g.move_to_coord(GANTRY_X_MAX_LENGTH, GANTRY_Y_MAX_LENGTH);
+  g.move_to_coord(0, 0);
 
-  std::cout << "Finished moving to origin!\n";
+  // std::cout << "Finished moving to origin!\n";
 
   // Calibration Function
   // std::cout << "Calibration testing...\n";
@@ -132,7 +137,7 @@ int main() {
   // std::cout << "Calibration Test Complete!\n";
 
   // Move coordinate test
-  g.move_to_coord(200, 200);
+  // g.move_to_coord(50, 300);
 
   // Delay line
   // std::this_thread::sleep_for(std::chrono::milliseconds(500));

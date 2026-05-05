@@ -151,8 +151,8 @@ bool gantry::move_to_origin() {
   // Phase 1: move South until m_y_origin triggers
   float total_y_deg = 0.0f;
 
-  m_lower_motor.set_target_rpm(1000);
-  m_upper_motor.set_target_rpm(1000);
+  // m_lower_motor.set_target_rpm(1000);
+  // m_upper_motor.set_target_rpm(1000);
 
   while (m_y_origin.read() != 1) {
     if (total_y_deg >= GANTRY_Y_MAX_ROTATIONS) {
@@ -166,7 +166,7 @@ bool gantry::move_to_origin() {
     // std::cout << "Current Y-Rotations: " << total_y_deg << "\n";
   }
 
-  // Phase 2: move East until m_x_origin triggers
+  // Phase 2: move West until m_x_origin triggers
   float total_x_deg = 0.0f;
   while (m_x_origin.read() != 1) {
     if (total_x_deg >= GANTRY_X_MAX_ROTATIONS) {
@@ -337,15 +337,18 @@ bool gantry::better_move(int dx, int dy) {
 
   // X sign convention: curr_x increases to the East. The CoreXY motor mixing
   // below is written so that +dx produces the same motor directions as
-  // move_x().
-  int lower_mm = -dx - dy;
-  int upper_mm = -dx + dy;
+  // move_x() and +dy produces the same motor directions as move_y().
+  // X and Y use different deg/mm calibration ratios, so each axis's
+  // contribution to motor rotation must be converted with its own ratio
+  // before being combined in degree-space.
+  float lower_deg_signed = -float(dx) * X_DEG_TO_MM - float(dy) * Y_DEG_TO_MM;
+  float upper_deg_signed = -float(dx) * X_DEG_TO_MM + float(dy) * Y_DEG_TO_MM;
 
-  float lower_deg = std::abs(lower_mm) * X_DEG_TO_MM;
-  float upper_deg = std::abs(upper_mm) * X_DEG_TO_MM;
+  float lower_deg = std::abs(lower_deg_signed);
+  float upper_deg = std::abs(upper_deg_signed);
 
-  uint8_t lower_dir = (lower_mm >= 0) ? iSV57T::CW : iSV57T::CCW;
-  uint8_t upper_dir = (upper_mm >= 0) ? iSV57T::CW : iSV57T::CCW;
+  uint8_t lower_dir = (lower_deg_signed >= 0.0f) ? iSV57T::CW : iSV57T::CCW;
+  uint8_t upper_dir = (upper_deg_signed >= 0.0f) ? iSV57T::CW : iSV57T::CCW;
 
   rotate_motors_independent(lower_deg, lower_dir, upper_deg, upper_dir);
 
@@ -379,9 +382,9 @@ bool gantry::rotate_motors_independent(float lower_deg, uint8_t lower_dir,
 
   // technically we can set the lower rpm limit to 0 but it's ok
   if (lower_deg > 0.0f)
-    lower_rpm = std::clamp(lower_rpm, 0.0f, 3000.0f);
+    lower_rpm = std::clamp(lower_rpm, 0.0f, 1000.0f);
   if (upper_deg > 0.0f)
-    upper_rpm = std::clamp(upper_rpm, 0.0f, 3000.0f);
+    upper_rpm = std::clamp(upper_rpm, 0.0f, 1000.0f);
 
   if (lower_deg > 0.0f)
     m_lower_motor.set_target_rpm(lower_rpm);
