@@ -74,12 +74,12 @@ public:
    * straight line to the destination using CoreXY motor mixing. The function
    * will return true if the action is completed. Otherwise, return false.
    *
-   * NOTE: The coordinate system is in units of millimeters (mm).
-   *
-   * @param p_x_target is the target x-coordinate.
-   * @param p_y_target is the target y-coordinate.
+   * @param puck_x current puck x position
+   * @param puck_y current puck y position
+   * @param target_x predicted target x
+   * @param target_y predicted target y
    */
-  bool move_to_coord(unsigned p_x_target, unsigned p_y_target);
+  bool move_to_adjusted_coord(unsigned puck_x, unsigned puck_y, unsigned target_x, unsigned target_y);
 
   /**
    * @brief Moves the center in the West-East direction (given the play POV) of

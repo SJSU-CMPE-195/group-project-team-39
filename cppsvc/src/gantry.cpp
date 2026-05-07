@@ -185,6 +185,45 @@ bool gantry::move_to_coord(unsigned p_x_target, unsigned p_y_target) {
   return move_relative((int)p_x_target - curr_x, (int)p_y_target - curr_y);
 }
 
+bool gantry::move_to_adjusted_coord(unsigned puck_x, unsigned puck_y, unsigned target_x, unsigned target_y) {
+  // Adjust the target based on puck and mallet positions for better hitting
+  int adj_x = target_x;
+  int adj_y = target_y;
+
+  // If puck is lower than mallet, move to a lower intermediate point first
+  if ((int)puck_y < curr_y) {
+    adj_y = std::max(0, (int)target_y - 30);  // 3cm lower, but not below 0
+  }
+
+  // For side edges (left or right), approach from bottom for upward hit
+  if (target_x == 0 || target_x == (unsigned)GANTRY_X_MAX_LENGTH) {
+    if ((int)target_y < curr_y) {
+      // Approach from bottom/upward
+      adj_y = std::max(0, (int)target_y - 30);
+    }
+  }
+
+  // For bottom edge, approach horizontally
+  if (target_y == 0) {
+    // Move to current y level first (horizontal approach)
+    adj_y = curr_y;
+  }
+
+  // Move to adjusted position first
+  if (!move_to_coord(adj_x, adj_y)) {
+    return false;
+  }
+
+  // Then move to final target if different from adjusted position
+  if (adj_x != (int)target_x || adj_y != (int)target_y) {
+    if (!move_to_coord(target_x, target_y)) {
+      return false;
+    }
+  }
+
+  return true;
+}
+
 bool gantry::calibration_test() {
   if (!move_to_origin())
     return false;
