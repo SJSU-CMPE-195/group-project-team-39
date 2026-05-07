@@ -39,13 +39,39 @@ public:
   ~iSV57T();
 
   /**
-   * @brief Function to control the motor's rotation.
+   * @brief Function to control the motor's rotation. This is a simple function
+   * to rotate the motor.
    *
    * @param p_direction sets the direction the motor will rotate; CCW = 0 and CW
    * = 1.
    * @param p_degree refers to the total degrees the motor should rotate.
    */
   void rotate(uint8_t p_direction, float p_degree);
+
+  /**
+   * @brief Function to control the motor's rotation with a trapezoidal velocity
+   * profile: ramp up from p_start_rpm to p_cruise_rpm, cruise, then ramp down
+   * to p_end_rpm. The ramp regions are sized as fractions of the total move.
+   *
+   * If p_ramp_up_fraction + p_ramp_down_fraction > 1.0, both are scaled down
+   * proportionally so they sum to 1.0 (triangular/degenerate profile).
+   *
+   * @param p_direction sets the direction the motor will rotate; CCW = 0 and
+   * CW = 1.
+   * @param p_degree refers to the total degrees the motor should rotate.
+   * @param p_start_rpm RPM at the very first pulse; ramps linearly up to
+   * p_cruise_rpm over the ramp-up region.
+   * @param p_cruise_rpm target cruise speed reached after ramp-up.
+   * @param p_end_rpm RPM at the very last pulse; ramps linearly down from
+   * p_cruise_rpm over the ramp-down region.
+   * @param p_ramp_up_fraction fraction of total pulses used to ramp up
+   * (0.0–1.0).
+   * @param p_ramp_down_fraction fraction of total pulses used to ramp down
+   * (0.0–1.0).
+   */
+  void rotate_profiled(uint8_t p_direction, float p_degree, float p_start_rpm,
+                       float p_cruise_rpm, float p_end_rpm,
+                       float p_ramp_up_fraction, float p_ramp_down_fraction);
 
   /**
    * @brief Function to set the target RPM to a desired value.

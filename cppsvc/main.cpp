@@ -55,8 +55,8 @@ int main() {
 
   std::cout << "Initializing limit switch objects...\n";
 
-  limitSwitch sw_y(chip4, sw1_line);
-  limitSwitch sw_x(chip4, sw2_line);
+  limitSwitch sw_x(chip4, sw1_line);
+  limitSwitch sw_y(chip4, sw2_line);
 
   std::cout << "Finished limit switch object initialization!\n";
 
@@ -79,8 +79,8 @@ int main() {
   iSV57T m_upper = iSV57T(chip0, m2_dir_line, m2_pul_line, pulse_per_rev);
 
   // Setting RPM Test
-  m_lower.set_target_rpm(500);
-  m_upper.set_target_rpm(500);
+  // m_lower.set_target_rpm(500);
+  // m_upper.set_target_rpm(500);
 
   std::cout << "Finished motor object initialization!\n";
 
@@ -121,18 +121,30 @@ int main() {
   // std::cout << "Moving to origin...\n";
 
   // g.move_to_origin();
+  g.curr_x = 0;
+  g.curr_y = 0;
+
+  // g.move_y(GANTRY_Y_MAX_LENGTH, true);
+  // g.move_to_coord(GANTRY_X_MAX_LENGTH, GANTRY_Y_MAX_LENGTH);
+  g.move_to_coord(300, 300);
+  g.move_to_coord(0, 600);
+  g.move_to_coord(0, 0);
+
+  // g.move_to_coord(0, GANTRY_Y_MAX_LENGTH);
+  // g.move_to_coord(GANTRY_X_MAX_LENGTH, GANTRY_Y_MAX_LENGTH);
+  // g.move_to_coord(0, 0);
 
   // std::cout << "Finished moving to origin!\n";
 
   // Calibration Function
-  std::cout << "Calibration testing...\n";
-  // Without Limit Switches
-  g.curr_x = 0;
-  g.curr_y = 0;
+  // std::cout << "Calibration testing...\n";
 
-  g.calibration_test();
+  // g.calibration_test();
 
-  std::cout << "Calibration Test Complete!\n";
+  // std::cout << "Calibration Test Complete!\n";
+
+  // Move coordinate test
+  // g.move_to_coord(50, 300);
 
   // Delay line
   // std::this_thread::sleep_for(std::chrono::milliseconds(500));

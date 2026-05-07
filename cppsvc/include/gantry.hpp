@@ -11,10 +11,24 @@
 static constexpr int GANTRY_X_MAX_LENGTH = 869; // In millimeters
 static constexpr int GANTRY_Y_MAX_LENGTH = 901; // In millimeters
 static constexpr int GANTRY_X_MAX_ROTATIONS =
-    7900; // West-East from play side POV; Units in degrees
+    7925; // West-East from play side POV; Units in degrees
 static constexpr int GANTRY_Y_MAX_ROTATIONS =
-    8095; // North-South from play side POV; Units in degrees
+    8000; // North-South from play side POV; Units in degrees
 static constexpr float HOMING_STEP_DEG = 10.0f;
+
+// Trapezoidal ramp profile for better_move / rotate_motors_independent.
+// Adjust these constants and recompile to tune the feel of each move.
+static constexpr float RAMP_BASE_RPM =
+    1200.0f; // cruise RPM for the dominant motor
+static constexpr float RAMP_START_RPM_FRAC =
+    0.10f; // start speed as fraction of cruise RPM
+static constexpr float RAMP_END_RPM_FRAC =
+    0.10f; // end speed as fraction of cruise RPM
+static constexpr float RAMP_UP_FRACTION =
+    0.0f; // fraction of move spent ramping up
+static constexpr float RAMP_DOWN_FRACTION =
+    0.15f; // fraction of move spent ramping down
+
 static constexpr float X_DEG_TO_MM =
     float(GANTRY_X_MAX_ROTATIONS) /
     float(GANTRY_X_MAX_LENGTH); // Ratio to define how many degrees to move 1
@@ -145,8 +159,12 @@ public:
   // enum class MotorSelect { BOTH, LOWER_ONLY, UPPER_ONLY };
   // void rotate_motors(float p_deg, uint8_t p_lower_dir, uint8_t p_upper_dir,
   //                    MotorSelect p_select);
-  // int curr_x;
-  // int curr_y;
+  int curr_x;
+  int curr_y;
+
+  bool better_move(int dx, int dy);
+  bool rotate_motors_independent(float lower_deg, uint8_t lower_dir,
+                                 float upper_deg, uint8_t upper_dir);
 
 private:
   /**
@@ -175,6 +193,6 @@ private:
   limitSwitch &m_y_origin;
 
   // Let's deal with whole numbers for simiplicity
-  int curr_x;
-  int curr_y;
+  // int curr_x;
+  // int curr_y;
 };

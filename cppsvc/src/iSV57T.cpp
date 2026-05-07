@@ -115,6 +115,91 @@ void iSV57T::rotate(uint8_t p_direction, float p_degree) {
   }
 }
 
+void iSV57T::rotate_profiled(uint8_t p_direction, float p_degree,
+                             float p_start_rpm, float p_cruise_rpm,
+                             float p_end_rpm, float p_ramp_up_fraction,
+                             float p_ramp_down_fraction) {
+  if (gpiod_line_set_value(m_dir_line, p_direction) < 0)
+    throw std::runtime_error(
+        std::string("Failed to set DIR pin during motor rotation. ") +
+        strerror(errno));
+
+  std::this_thread::sleep_for(std::chrono::microseconds(10));
+
+  const long pulses =
+      static_cast<long>(std::llround((p_degree / 360.0) * m_pulse_per_rev));
+  if (pulses <= 0)
+    return;
+
+  // Clamp RPMs to a safe minimum so period_us never becomes unreasonably large.
+  const float min_rpm = 1.0f;
+  p_start_rpm  = std::max(p_start_rpm,  min_rpm);
+  p_cruise_rpm = std::max(p_cruise_rpm, min_rpm);
+  p_end_rpm    = std::max(p_end_rpm,    min_rpm);
+
+  // Rescale fractions if they exceed 1.0 combined (short-move case).
+  float up_frac   = p_ramp_up_fraction;
+  float down_frac = p_ramp_down_fraction;
+  float total_frac = up_frac + down_frac;
+  if (total_frac > 1.0f) {
+    up_frac   /= total_frac;
+    down_frac /= total_frac;
+  }
+
+  const long up_pulses   = static_cast<long>(std::llround(up_frac   * float(pulses)));
+  const long down_pulses = static_cast<long>(std::llround(down_frac * float(pulses)));
+  // cruise_pulses is whatever remains after reserving ramp regions.
+  const long cruise_start = up_pulses;
+  const long cruise_end   = pulses - down_pulses; // exclusive upper bound of cruise
+
+  auto period_us_for_rpm = [&](float rpm) -> uint32_t {
+    const double steps_per_sec =
+        (static_cast<double>(rpm) * static_cast<double>(m_pulse_per_rev)) / 60.0;
+    if (steps_per_sec <= 0.0)
+      throw std::runtime_error("Invalid steps_per_sec computed in rotate_profiled.");
+    uint32_t p = static_cast<uint32_t>(1'000'000.0 / steps_per_sec);
+    if (p <= static_cast<uint32_t>(pulse_high_us) + 1)
+      p = static_cast<uint32_t>(pulse_high_us) + 2;
+    return p;
+  };
+
+  const auto high_dur = std::chrono::microseconds(
+      static_cast<long long>(std::llround(pulse_high_us)));
+
+  auto next = std::chrono::steady_clock::now();
+  for (long i = 0; i < pulses; ++i) {
+    float current_rpm;
+    if (up_pulses > 0 && i < cruise_start) {
+      // Ramp up: linear interpolation from start_rpm to cruise_rpm.
+      float t = float(i) / float(up_pulses);
+      current_rpm = p_start_rpm + t * (p_cruise_rpm - p_start_rpm);
+    } else if (i < cruise_end) {
+      current_rpm = p_cruise_rpm;
+    } else {
+      // Ramp down: linear interpolation from cruise_rpm to end_rpm.
+      long down_i = i - cruise_end;
+      float t = (down_pulses > 0) ? float(down_i) / float(down_pulses) : 1.0f;
+      current_rpm = p_cruise_rpm + t * (p_end_rpm - p_cruise_rpm);
+    }
+
+    uint32_t period_us = period_us_for_rpm(current_rpm);
+    const uint32_t low_us = period_us - static_cast<uint32_t>(pulse_high_us);
+    const auto low_dur = std::chrono::microseconds(static_cast<long long>(low_us));
+
+    if (gpiod_line_set_value(m_pul_line, 1) < 0)
+      throw std::runtime_error(std::string("Failed to set PUL pin HIGH. ") +
+                               strerror(errno));
+    next += high_dur;
+    spin_until(next);
+
+    if (gpiod_line_set_value(m_pul_line, 0) < 0)
+      throw std::runtime_error(std::string("Failed to set PUL pin LOW. ") +
+                               strerror(errno));
+    next += low_dur;
+    spin_until(next);
+  }
+}
+
 void iSV57T::set_pulse_high_us(float p_pulse_high_us) {
   if (p_pulse_high_us >= 2.5 && p_pulse_high_us <= 5.0)
     pulse_high_us = p_pulse_high_us;
@@ -127,12 +212,12 @@ void iSV57T::set_pulse_high_us(float p_pulse_high_us) {
 }
 
 void iSV57T::set_target_rpm(float p_target_rpm) {
-  if (p_target_rpm >= 100 && p_target_rpm <= 3000)
+  if (p_target_rpm >= 0 && p_target_rpm <= 3000)
     target_rpm = p_target_rpm;
   else
     throw std::runtime_error(
         std::string("Failed to set new target RPM due to being out "
-                    "of the range of 100 to 3000 RPM. "
+                    "of the range of 0 to 3000 RPM. "
                     "Current target_rpm value is ") +
         std::to_string(target_rpm) + " RPM.");
 }
