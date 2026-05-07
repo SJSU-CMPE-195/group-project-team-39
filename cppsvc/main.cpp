@@ -15,8 +15,6 @@
 
 #include "gantry.hpp"
 #include "iSV57T.hpp"
-#include "include/gantry.hpp"
-#include "include/iSV57T.hpp"
 #include "limitSwitch.hpp"
 
 int main() {
@@ -106,29 +104,16 @@ int main() {
   // Moving West
   // g.rotate_motors(1440, iSV57T::CW, iSV57T::CW, gantry::MotorSelect::BOTH);
 
-  // Moving Diagonally
-  // Without Limit Switches
-  // g.curr_x = 200;
-  // g.curr_y = 200;
-  // g.move_diagonal(100, 1);
-  // std::this_thread::sleep_for(std::chrono::milliseconds(500));
-  // g.move_diagonal(100, 0);
-  // g.move_diagonal(100, 2);
-  // std::this_thread::sleep_for(std::chrono::milliseconds(500));
-  // g.move_diagonal(100, 3);
-
   // Move to Origin Test
   // std::cout << "Moving to origin...\n";
 
   // g.move_to_origin();
-  g.curr_x = 0;
-  g.curr_y = 0;
 
   // g.move_y(GANTRY_Y_MAX_LENGTH, true);
   // g.move_to_coord(GANTRY_X_MAX_LENGTH, GANTRY_Y_MAX_LENGTH);
-  g.move_to_coord(300, 300);
-  g.move_to_coord(0, 600);
-  g.move_to_coord(0, 0);
+  // g.move_to_coord(300, 300);
+  // g.move_to_coord(0, 600);
+  // g.move_to_coord(0, 0);
 
   // g.move_to_coord(0, GANTRY_Y_MAX_LENGTH);
   // g.move_to_coord(GANTRY_X_MAX_LENGTH, GANTRY_Y_MAX_LENGTH);
