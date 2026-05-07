@@ -369,53 +369,66 @@ bool gantry::rotate_motors_independent(float lower_deg, uint8_t lower_dir,
   if (max_deg <= 0.0f)
     return true;
 
-  // we can modify this to be how ever fast we wnat
-  const float base_rpm = 500.0f;
+  // Scale each motor's cruise RPM by how much of the total move it carries,
+  // so both motors start and finish at the same wall-clock time.
+  const float lower_scale = (lower_deg > 0.0f) ? (lower_deg / max_deg) : 0.0f;
+  const float upper_scale = (upper_deg > 0.0f) ? (upper_deg / max_deg) : 0.0f;
 
-  float lower_rpm = 0.0f;
-  float upper_rpm = 0.0f;
-  // set the rpm based on ratio of how many degrees each motor's gotta move
-  if (lower_deg > 0.0f)
-    lower_rpm = base_rpm * (lower_deg / max_deg);
-  if (upper_deg > 0.0f)
-    upper_rpm = base_rpm * (upper_deg / max_deg);
+  const float lower_cruise = std::clamp(RAMP_BASE_RPM * lower_scale, 0.0f, 1000.0f);
+  const float upper_cruise = std::clamp(RAMP_BASE_RPM * upper_scale, 0.0f, 1000.0f);
 
-  // technically we can set the lower rpm limit to 0 but it's ok
-  if (lower_deg > 0.0f)
-    lower_rpm = std::clamp(lower_rpm, 0.0f, 1000.0f);
-  if (upper_deg > 0.0f)
-    upper_rpm = std::clamp(upper_rpm, 0.0f, 1000.0f);
+  // start/end RPMs are the same fraction of each motor's cruise RPM, so the
+  // ramp shape is identical in time across both motors.
+  const float lower_start = lower_cruise * RAMP_START_RPM_FRAC;
+  const float lower_end   = lower_cruise * RAMP_END_RPM_FRAC;
+  const float upper_start = upper_cruise * RAMP_START_RPM_FRAC;
+  const float upper_end   = upper_cruise * RAMP_END_RPM_FRAC;
 
-  if (lower_deg > 0.0f)
-    m_lower_motor.set_target_rpm(lower_rpm);
-  if (upper_deg > 0.0f)
-    m_upper_motor.set_target_rpm(upper_rpm);
-
-  std::exception_ptr eptr = nullptr;
+  // Both motors use the same fractions so their phase transitions are
+  // simultaneous; the short-move rescaling inside rotate_profiled is also
+  // applied identically to each.
+  std::exception_ptr ep_lower = nullptr;
+  std::exception_ptr ep_upper = nullptr;
 
   std::thread lower_thread([&]() {
     try {
       if (lower_deg > 0.0f)
-        m_lower_motor.rotate(lower_dir, lower_deg);
+        m_lower_motor.rotate_profiled(lower_dir, lower_deg,
+                                      lower_start, lower_cruise, lower_end,
+                                      RAMP_UP_FRACTION, RAMP_DOWN_FRACTION);
     } catch (...) {
-      eptr = std::current_exception();
+      ep_lower = std::current_exception();
     }
   });
 
   std::thread upper_thread([&]() {
     try {
       if (upper_deg > 0.0f)
-        m_upper_motor.rotate(upper_dir, upper_deg);
+        m_upper_motor.rotate_profiled(upper_dir, upper_deg,
+                                      upper_start, upper_cruise, upper_end,
+                                      RAMP_UP_FRACTION, RAMP_DOWN_FRACTION);
     } catch (...) {
-      eptr = std::current_exception();
+      ep_upper = std::current_exception();
     }
   });
 
   lower_thread.join();
   upper_thread.join();
 
-  if (eptr)
-    std::rethrow_exception(eptr);
+  if (ep_lower) {
+    try {
+      std::rethrow_exception(ep_lower);
+    } catch (const std::exception &e) {
+      throw std::runtime_error(std::string("Lower motor failed: ") + e.what());
+    }
+  }
+  if (ep_upper) {
+    try {
+      std::rethrow_exception(ep_upper);
+    } catch (const std::exception &e) {
+      throw std::runtime_error(std::string("Upper motor failed: ") + e.what());
+    }
+  }
 
   return true;
 }
