@@ -175,7 +175,7 @@ bool gantry::move_to_origin() {
       return false;
     }
     rotate_motors(HOMING_STEP_DEG, iSV57T::CW, iSV57T::CW,
-                  MotorSelect::BOTH); // Moving WEST
+                  MotorSelect::BOTH); // Moving West
     total_x_deg += HOMING_STEP_DEG;
     // std::cout << "Current X-Rotations: " << total_x_deg << "\n";
   }

@@ -100,6 +100,55 @@ RoboMallet/
 └── README.md
 ```
 
+## Stress Test Results
+
+### Test Configuration
+- Testing Type: Playing against robot for stress testing  
+- Duration: 10-15 minutes per trial  
+- Input Method: Manual puck shots (human player)  
+- Scenarios Tested:
+  - Straight shots at varying speeds  
+  - Angled shots including wall bounces  
+  - Rapid consecutive shots (high-frequency gameplay)  
+- Environment:
+  - Fixed overhead camera  
+  - Controlled and Bright indoor lighting for easy color detection
+
+---
+
+### Results
+| Metric | Value |
+|--------|-------|
+| Max Trackable Puck Speed | 0.813 m/s |
+| Interception Success Rate | 93.5 % |
+| Avg Response Time (vision → actuation) | 21 - 81 ms |
+| Prediction Error (avg) | 15% |
+
+---
+
+### Observations
+- System performs reliably for straight and angled shots  
+- Performance decreases for high-speed, multi-bounce trajectories, and drift caused due to air
+- Largest bottleneck is in the transferance of information from one process to the next using shared memory
+- Occasional tracking loss observed during rapid consecutive shots
+
+---
+
+### Bottlenecks
+- Camera frame rate and image processing latency  
+- Mechanical limits of gantry speed and acceleration  
+
+---
+
+### Testing Approach
+
+| Approach | Tool | Use Case |
+|----------|------|---------|
+| Manual Testing | Documented procedure | Simulate real gameplay with controlled shot variations |
+| Vision Pipeline Testing | OpenCV (logging + profiling) | Measure detection latency and tracking accuracy using hardware timers and counters |
+| Control System Testing | Motor controller + encoder feedback | Evaluate response time and positioning accuracy |
+| Integrated System Testing | Full system | End-to-end performance under realistic game conditions |
+
 ## Demo
 
 🎥 **Project Demo Videos**
