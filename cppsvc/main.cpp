@@ -191,8 +191,8 @@ int main() {
   const unsigned m2_pul_line = 13; // Physical Pin 16
 
   // limit switch
-  const unsigned sw1_line = 1; // Physical Pin 17
-  const unsigned sw2_line = 2; // Physical Pin 18
+  const unsigned sw1_line = 2; // Physical Pin 17
+  const unsigned sw2_line = 1; // Physical Pin 18
 
   const uint16_t pulse_per_rev = 2000;
 
