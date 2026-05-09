@@ -70,9 +70,10 @@ public:
 
   /**
    * @brief Moves the center of the gantry system to a desired coordinate point.
-   * The coordinate grid is defined in millimeters. The gantry will move in a
-   * straight line to the destination using CoreXY motor mixing. The function
-   * will return true if the action is completed. Otherwise, return false.
+   * The coordinate grid is defined in millimeters. The gantry will first
+   * complete the X-axis displacement via move_x(), then the Y-axis
+   * displacement via move_y(). The function will return true if the action is
+   * completed. Otherwise, return false.
    *
    * NOTE: The coordinate system is in units of millimeters (mm).
    *
@@ -132,16 +133,6 @@ private:
    */
   void run_motors(float lower_deg, uint8_t lower_dir, float upper_deg,
                   uint8_t upper_dir, bool profiled);
-
-  /**
-   * @brief Moves the gantry by (dx, dy) millimeters from its current position
-   * using CoreXY motor mixing. Bounds-checks the destination, runs the motors
-   * with the ramped profile, and updates curr_x / curr_y on success.
-   *
-   * @param dx Signed displacement in the X axis (+ = East, - = West).
-   * @param dy Signed displacement in the Y axis (+ = North, - = South).
-   */
-  bool move_relative(int dx, int dy);
 
   iSV57T &m_lower_motor;
   iSV57T &m_upper_motor;

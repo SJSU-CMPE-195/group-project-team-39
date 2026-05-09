@@ -93,37 +93,6 @@ void gantry::run_motors(float lower_deg, uint8_t lower_dir, float upper_deg,
   }
 }
 
-bool gantry::move_relative(int dx, int dy) {
-  if (dx == 0 && dy == 0)
-    return true;
-
-  const int new_x = curr_x + dx;
-  const int new_y = curr_y + dy;
-
-  if (new_x < 0 || new_x > GANTRY_X_MAX_LENGTH || new_y < 0 ||
-      new_y > GANTRY_Y_MAX_LENGTH) {
-    throw std::runtime_error("Move goes out of bounds.");
-  }
-
-  // CoreXY mixing: convert (dx, dy) mm into per-motor signed degrees.
-  // Sign convention: +dx = East, +dy = North, matching move_x / move_y.
-  const float lower_signed = -float(dx) * X_DEG_TO_MM - float(dy) * Y_DEG_TO_MM;
-  const float upper_signed = -float(dx) * X_DEG_TO_MM + float(dy) * Y_DEG_TO_MM;
-
-  const float lower_deg = std::abs(lower_signed);
-  const float upper_deg = std::abs(upper_signed);
-
-  const uint8_t lower_dir = (lower_signed >= 0.0f) ? iSV57T::CW : iSV57T::CCW;
-  const uint8_t upper_dir = (upper_signed >= 0.0f) ? iSV57T::CW : iSV57T::CCW;
-
-  run_motors(lower_deg, lower_dir, upper_deg, upper_dir, /*profiled=*/true);
-
-  curr_x = new_x;
-  curr_y = new_y;
-
-  return true;
-}
-
 // Public functions
 
 gantry::gantry(iSV57T &p_lower_motor, iSV57T &p_upper_motor,
@@ -134,17 +103,47 @@ gantry::gantry(iSV57T &p_lower_motor, iSV57T &p_upper_motor,
 bool gantry::move_x(unsigned int p_mm, bool p_direction) {
   if (p_mm == 0)
     return true;
+
   // true = West (decreasing x), false = East (increasing x)
   const int dx = p_direction ? -int(p_mm) : int(p_mm);
-  return move_relative(dx, 0);
+  const int new_x = curr_x + dx;
+
+  if (new_x < 0 || new_x > GANTRY_X_MAX_LENGTH)
+    throw std::runtime_error("Move goes out of bounds.");
+
+  // CoreXY: dy=0 → both motors carry equal degrees in the same direction.
+  // lower_signed = upper_signed = -dx * X_DEG_TO_MM
+  const float signed_deg = -float(dx) * X_DEG_TO_MM;
+  const float deg = std::abs(signed_deg);
+  const uint8_t dir = (signed_deg >= 0.0f) ? iSV57T::CW : iSV57T::CCW;
+
+  run_motors(deg, dir, deg, dir, /*profiled=*/true);
+  curr_x = new_x;
+  return true;
 }
 
 bool gantry::move_y(unsigned int p_mm, bool p_direction) {
   if (p_mm == 0)
     return true;
+
   // true = North (increasing y), false = South (decreasing y)
   const int dy = p_direction ? int(p_mm) : -int(p_mm);
-  return move_relative(0, dy);
+  const int new_y = curr_y + dy;
+
+  if (new_y < 0 || new_y > GANTRY_Y_MAX_LENGTH)
+    throw std::runtime_error("Move goes out of bounds.");
+
+  // CoreXY: dx=0 → both motors carry equal degrees in opposite directions.
+  // lower_signed = -dy * Y_DEG_TO_MM, upper_signed = +dy * Y_DEG_TO_MM
+  const float lower_signed = -float(dy) * Y_DEG_TO_MM;
+  const float upper_signed = float(dy) * Y_DEG_TO_MM;
+  const float deg = std::abs(lower_signed);
+  const uint8_t lower_dir = (lower_signed >= 0.0f) ? iSV57T::CW : iSV57T::CCW;
+  const uint8_t upper_dir = (upper_signed >= 0.0f) ? iSV57T::CW : iSV57T::CCW;
+
+  run_motors(deg, lower_dir, deg, upper_dir, /*profiled=*/true);
+  curr_y = new_y;
+  return true;
 }
 
 bool gantry::move_to_origin() {
@@ -182,7 +181,20 @@ bool gantry::move_to_coord(unsigned p_x_target, unsigned p_y_target) {
       (int)p_y_target > GANTRY_Y_MAX_LENGTH)
     throw std::runtime_error("Target coordinate is out of bounds.");
 
-  return move_relative((int)p_x_target - curr_x, (int)p_y_target - curr_y);
+  const int dx = (int)p_x_target - curr_x;
+  const int dy = (int)p_y_target - curr_y;
+
+  if (dx != 0) {
+    // dx < 0 = West (true), dx > 0 = East (false)
+    if (!move_x((unsigned)std::abs(dx), dx < 0))
+      return false;
+  }
+  if (dy != 0) {
+    // dy > 0 = North (true), dy < 0 = South (false)
+    if (!move_y((unsigned)std::abs(dy), dy > 0))
+      return false;
+  }
+  return true;
 }
 
 bool gantry::calibration_test() {
