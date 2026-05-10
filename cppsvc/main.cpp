@@ -1,23 +1,3 @@
-// main.cpp - gantry side of the Python <-> C++ shared-memory loop.
-//
-// What this version does:
-//   - Reads the 64-byte mm-based struct produced by ipc.py (wire v2)
-//   - Only moves the X axis; Y is locked to a defensive line
-//   - DEFEND   -> move X to (mallet_home + x_mm)
-//   - IGNORE   -> recenter to rest X
-//   - NO_TRACK -> recenter to rest X
-//
-// Coordinate convention:
-//   Python publishes mallet-relative millimeters (x_mm = 0 means the puck is
-//   directly above the mallet's resting position).  The mallet's physical
-//   position in the gantry's own frame (measured from the X/Y limit switches)
-//   is MALLET_HOME_X_MM.  So:
-//        gantry_target_x_mm = MALLET_HOME_X_MM + x_mm
-//
-// Calibrate MALLET_HOME_X_MM once: home the gantry, jog it until the
-// physical mallet sits exactly under what the camera reports as (0, 0) mm,
-// and read g.curr_x.
-
 #include <atomic>
 #include <chrono>
 #include <cmath>
@@ -40,20 +20,21 @@
 #include "iSV57T.hpp"
 #include "limitSwitch.hpp"
 
-// ----------------------------------------------------------------------------
-// PHYSICAL CONSTANTS - set these for your rig
-// ----------------------------------------------------------------------------
+// X position (mm from X limit switch) when Python reports x_mm = 0.
+static constexpr int MALLET_HOME_X_MM = 475;
 
-// X position (mm, gantry frame) where the mallet sits when Python reports x_mm = 0.
-// MEASURE THIS ONCE on the real hardware and hardcode it.
-static constexpr int MALLET_HOME_X_MM = 400;   // <-- change to your value
+// Y position (mm from Y limit switch) for the defensive line.
+static constexpr int DEFENSIVE_Y_MM   = 145;
 
-// Y position (mm, gantry frame) the mallet stays at the whole game.
-// This is your "defensive line."
-static constexpr int DEFENSIVE_Y_MM   = 100;   // <-- change to your value
-
-// Where to park when there's no puck to defend (typically center of X travel).
+// Park position when no puck to defend.
 static constexpr int REST_X_MM        = MALLET_HOME_X_MM;
+
+// Safety hard limits — mallet never crosses these regardless of what Python sends.
+// X range: allow full ±475 mm travel from home (= [0, 950] given home=475).
+// Y min: defensive line (mallet never goes south of it).
+static constexpr int X_SAFE_MIN_MM    = 0;
+static constexpr int X_SAFE_MAX_MM    = MALLET_HOME_X_MM + 475;  // 950
+static constexpr int Y_SAFE_MIN_MM    = DEFENSIVE_Y_MM;
 
 // ----------------------------------------------------------------------------
 // WIRE FORMAT - must match ipc.py exactly
@@ -125,9 +106,15 @@ static bool read_stable(const shm_xy *p, uint32_t &last_seq,
 // (No unit scaling -- both sides speak mm now.)
 static int mallet_x_to_gantry_x(double x_mm) {
   long r = std::lround(static_cast<double>(MALLET_HOME_X_MM) + x_mm);
-  if (r < 0)                   r = 0;
-  if (r > GANTRY_X_MAX_LENGTH) r = GANTRY_X_MAX_LENGTH;
+  if (r < X_SAFE_MIN_MM) r = X_SAFE_MIN_MM;
+  if (r > X_SAFE_MAX_MM) r = X_SAFE_MAX_MM;
   return static_cast<int>(r);
+}
+
+static unsigned safe_y(unsigned y) {
+  if ((int)y < Y_SAFE_MIN_MM) return (unsigned)Y_SAFE_MIN_MM;
+  if ((int)y > GANTRY_Y_MAX_LENGTH) return (unsigned)GANTRY_Y_MAX_LENGTH;
+  return y;
 }
 
 // ----------------------------------------------------------------------------
@@ -177,8 +164,8 @@ int main() {
   iSV57T m_upper = iSV57T(chip0, m2_dir_line, m2_pul_line, pulse_per_rev);
 
   try {
-    m_lower.set_target_rpm(700);
-    m_upper.set_target_rpm(700);
+    m_lower.set_target_rpm(900);
+    m_upper.set_target_rpm(900);
   } catch (const std::exception &e) {
     std::cerr << "Failed to set target RPM: " << e.what() << "\n";
     gpiod_chip_close(chip4);
@@ -187,19 +174,10 @@ int main() {
   }
 
   gantry g = gantry(m_lower, m_upper, sw_x, sw_y);
-  g.curr_x = 0;
-  g.curr_y = 0;
-
-  // Park on the defensive line.  After this, every move keeps Y at
-  // DEFENSIVE_Y_MM, so only the X motor physically rotates.
-  try {
-    g.move_to_coord(REST_X_MM, DEFENSIVE_Y_MM);
-  } catch (const std::exception &e) {
-    std::cerr << "Initial park to defensive line failed: " << e.what() << "\n";
-    gpiod_chip_close(chip4);
-    gpiod_chip_close(chip0);
-    return 1;
-  }
+  // Tell the gantry where the mallet already is (no homing — caller must
+  // manually place mallet at (MALLET_HOME_X_MM, DEFENSIVE_Y_MM) before starting).
+  g.curr_x = MALLET_HOME_X_MM;
+  g.curr_y = DEFENSIVE_Y_MM;
 
   // -------- Attach to shared memory ----------------------------------------
   int shm_fd = -1;
@@ -267,9 +245,8 @@ int main() {
       switch (kind) {
         case KIND_DEFEND: {
           int target_x = mallet_x_to_gantry_x(x_mm);
-          // Y stays at DEFENSIVE_Y_MM, so this is effectively a pure X move.
           g.move_to_coord(static_cast<unsigned>(target_x),
-                          static_cast<unsigned>(DEFENSIVE_Y_MM));
+                          safe_y(DEFENSIVE_Y_MM));
           std::cout << "[C++] DEFEND  x_mm=" << x_mm
                     << " -> gantry_x=" << target_x << " mm\n";
           break;
@@ -278,7 +255,7 @@ int main() {
         case KIND_NO_TRACK:
           if (g.curr_x != REST_X_MM) {
             g.move_to_coord(static_cast<unsigned>(REST_X_MM),
-                            static_cast<unsigned>(DEFENSIVE_Y_MM));
+                            safe_y(DEFENSIVE_Y_MM));
             std::cout << "[C++] "
                       << (kind == KIND_IGNORE ? "IGNORE" : "NO_TRACK")
                       << " -> rest\n";

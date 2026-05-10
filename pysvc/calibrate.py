@@ -5,15 +5,17 @@ import numpy as np
 from scipy.interpolate import RBFInterpolator
 
 # ==============================================================================
-# SETTINGS
+# SETTINGS — must match nam.py
 # ==============================================================================
-CAPTURE_W = 2560
+CAPTURE_W = 2560        # native stereo output: 2x(1280x720)
 CAPTURE_H = 720
+FRAME_W   = CAPTURE_W // 2   # 1280, after cropping to left eye
+FRAME_H   = CAPTURE_H        # 720
 GRAB_R    = 22
 
-# Remap output (matches main.py — pre-rotation, landscape)
-PREVIEW_W = 1020
-PREVIEW_H = 800
+# Remap output (matches nam.py — pre-rotation, landscape)
+PREVIEW_W = 510
+PREVIEW_H = 400
 
 # Real-world critical zone size (centimeters)
 CRITICAL_ZONE_W_CM = 55.0
@@ -25,14 +27,14 @@ CRITICAL_ZONE_H_CM = 35.0
 # ==============================================================================
 # 8 remap points (TL, T-mid, TR, R-mid, BR, B-mid, BL, L-mid)
 remap_pts = [
-    [int(CAPTURE_W * 0.30), int(CAPTURE_H * 0.15)],   # 0 TL
-    [int(CAPTURE_W * 0.50), int(CAPTURE_H * 0.10)],   # 1 T-mid
-    [int(CAPTURE_W * 0.70), int(CAPTURE_H * 0.15)],   # 2 TR
-    [int(CAPTURE_W * 0.74), int(CAPTURE_H * 0.50)],   # 3 R-mid
-    [int(CAPTURE_W * 0.70), int(CAPTURE_H * 0.85)],   # 4 BR
-    [int(CAPTURE_W * 0.50), int(CAPTURE_H * 0.90)],   # 5 B-mid
-    [int(CAPTURE_W * 0.30), int(CAPTURE_H * 0.85)],   # 6 BL
-    [int(CAPTURE_W * 0.26), int(CAPTURE_H * 0.50)],   # 7 L-mid
+    [int(FRAME_W * 0.15), int(FRAME_H * 0.10)],   # 0 TL
+    [int(FRAME_W * 0.50), int(FRAME_H * 0.05)],   # 1 T-mid
+    [int(FRAME_W * 0.85), int(FRAME_H * 0.10)],   # 2 TR
+    [int(FRAME_W * 0.90), int(FRAME_H * 0.50)],   # 3 R-mid
+    [int(FRAME_W * 0.85), int(FRAME_H * 0.90)],   # 4 BR
+    [int(FRAME_W * 0.50), int(FRAME_H * 0.95)],   # 5 B-mid
+    [int(FRAME_W * 0.15), int(FRAME_H * 0.90)],   # 6 BL
+    [int(FRAME_W * 0.10), int(FRAME_H * 0.50)],   # 7 L-mid
 ]
 REMAP_LABELS = ["TL", "T-mid", "TR", "R-mid", "BR", "B-mid", "BL", "L-mid"]
 REMAP_COLOR  = (0, 220, 180)        # teal
@@ -115,8 +117,8 @@ def mouse_raw(event, x, y, flags, param):
                 return
     elif event == cv2.EVENT_MOUSEMOVE and drag_target and drag_target[0] == "remap":
         idx = drag_target[1]
-        remap_pts[idx][0] = int(np.clip(x, 0, CAPTURE_W - 1))
-        remap_pts[idx][1] = int(np.clip(y, 0, CAPTURE_H - 1))
+        remap_pts[idx][0] = int(np.clip(x, 0, FRAME_W - 1))
+        remap_pts[idx][1] = int(np.clip(y, 0, FRAME_H - 1))
     elif event == cv2.EVENT_LBUTTONUP and drag_target and drag_target[0] == "remap":
         drag_target = None
         remap_dirty = True
@@ -243,8 +245,8 @@ def main():
 
     cv2.namedWindow(win_raw,  cv2.WINDOW_NORMAL)
     cv2.namedWindow(win_prev, cv2.WINDOW_NORMAL)
-    cv2.resizeWindow(win_raw,  CAPTURE_W // 2,  CAPTURE_H // 2)
-    cv2.resizeWindow(win_prev, PREVIEW_H,        PREVIEW_W)
+    cv2.resizeWindow(win_raw,  FRAME_W // 2,  FRAME_H // 2)
+    cv2.resizeWindow(win_prev, PREVIEW_H,     PREVIEW_W)
     cv2.setMouseCallback(win_raw,  mouse_raw)
     cv2.setMouseCallback(win_prev, mouse_preview)
 
@@ -263,6 +265,11 @@ def main():
         ret, frame = cap.read()
         if not ret:
             break
+
+        # Stereo cam outputs 2560x720 side-by-side; keep only the left eye
+        # (matches what nam.py does in preprocess_frame).
+        if frame.shape[1] >= CAPTURE_W:
+            frame = frame[:, :FRAME_W]
 
         if remap_dirty:
             print("[INFO] Rebuilding remap...", flush=True)

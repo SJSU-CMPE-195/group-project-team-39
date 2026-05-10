@@ -9,7 +9,9 @@ file(GLOB_RECURSE SOURCES "src/*.cpp")
 find_package(Threads REQUIRED)
 
 add_executable(cppsvc main.cpp ${SOURCES})
-
 target_include_directories(cppsvc PRIVATE include)
-
 target_link_libraries(cppsvc PRIVATE gpiod Threads::Threads)
+
+add_executable(calibrate calibrate.cpp ${SOURCES})
+target_include_directories(calibrate PRIVATE include)
+target_link_libraries(calibrate PRIVATE gpiod Threads::Threads)

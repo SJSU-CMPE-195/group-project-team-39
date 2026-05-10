@@ -10,6 +10,7 @@ RUN dpkg --add-architecture arm64 && \
 
 COPY CMakeLists.txt ./
 COPY main.cpp ./
+COPY calibrate.cpp ./
 COPY src/ ./src/
 COPY include/ ./include/
 
@@ -32,7 +33,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # Optional but recommended on Torizon
 RUN usermod -a -G gpio torizon
 
-COPY --from=build /src/build/cppsvc /usr/local/bin/cppsvc
+COPY --from=build /src/build/cppsvc    /usr/local/bin/cppsvc
+COPY --from=build /src/build/calibrate /usr/local/bin/calibrate
 
 USER torizon
 ENTRYPOINT ["/usr/local/bin/cppsvc"]

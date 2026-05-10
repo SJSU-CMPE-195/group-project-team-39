@@ -47,6 +47,10 @@ public:
    */
   void rotate(uint8_t p_direction, float p_degree);
 
+  void rotate_profiled(uint8_t p_direction, float p_degree,
+                       float p_start_rpm, float p_cruise_rpm, float p_end_rpm,
+                       float p_ramp_up_fraction, float p_ramp_down_fraction);
+
   /**
    * @brief Function to set the target RPM to a desired value.
    *

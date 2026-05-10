@@ -29,6 +29,7 @@ prototyping on macOS), the Publisher silently becomes a no-op so your
 detection pipeline still runs.
 """
 
+import os
 import struct
 import time
 
@@ -101,6 +102,10 @@ class Publisher:
         except posix_ipc.ExistentialError:
             # Already exists from a previous run -- attach and reuse
             self._shm = posix_ipc.SharedMemory(name)
+
+        # Force world read+write so other containers (running as different
+        # users) can open the segment with O_RDWR.
+        os.chmod(f'/dev/shm{name}', 0o666)
 
         self._mm = mmap.mmap(self._shm.fd, self._shm.size)
         self._shm.close_fd()  # mmap keeps the mapping alive without the fd

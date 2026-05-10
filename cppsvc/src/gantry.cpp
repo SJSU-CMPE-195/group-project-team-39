@@ -1,178 +1,174 @@
 #include "gantry.hpp"
 
-#include <cerrno>
+#include <algorithm>
 #include <chrono>
 #include <cmath>
 #include <cstdint>
-#include <cstring>
-#include <gpiod.h>
+#include <exception>
 #include <stdexcept>
 #include <string>
 #include <thread>
 
-// Private Functions
-void gantry::rotate_motors(float p_deg, uint8_t p_lower_dir,
-                           uint8_t p_upper_dir, MotorSelect p_select) {
-  std::exception_ptr ep_lower_motor = nullptr, ep_upper_motor = nullptr;
+// Private functions
 
-  const bool run_lower =
-      (p_select == MotorSelect::BOTH || p_select == MotorSelect::LOWER_ONLY);
-  const bool run_upper =
-      (p_select == MotorSelect::BOTH || p_select == MotorSelect::UPPER_ONLY);
+void gantry::run_motors(float lower_deg, uint8_t lower_dir, float upper_deg,
+                        uint8_t upper_dir, bool profiled) {
+  const bool run_lower = (lower_deg > 0.0f);
+  const bool run_upper = (upper_deg > 0.0f);
 
-  std::thread lower_motor_thread, upper_motor_thread;
+  if (!run_lower && !run_upper)
+    return;
+
+  // Compute per-motor ramp parameters so that both motors start and finish at
+  // the same wall-clock time: each motor's cruise RPM is scaled by the fraction
+  // of the total move it carries (dominant motor = RAMP_BASE_RPM).
+  float lower_start = 0.0f, lower_cruise = 0.0f, lower_end = 0.0f;
+  float upper_start = 0.0f, upper_cruise = 0.0f, upper_end = 0.0f;
+
+  if (profiled) {
+    const float max_deg = std::max(lower_deg, upper_deg);
+    const float lower_scale = run_lower ? (lower_deg / max_deg) : 0.0f;
+    const float upper_scale = run_upper ? (upper_deg / max_deg) : 0.0f;
+
+    lower_cruise = std::clamp(RAMP_BASE_RPM * lower_scale, 0.0f, 3000.0f);
+    upper_cruise = std::clamp(RAMP_BASE_RPM * upper_scale, 0.0f, 3000.0f);
+    lower_start = lower_cruise * RAMP_START_RPM_FRAC;
+    lower_end = lower_cruise * RAMP_END_RPM_FRAC;
+    upper_start = upper_cruise * RAMP_START_RPM_FRAC;
+    upper_end = upper_cruise * RAMP_END_RPM_FRAC;
+  }
+
+  std::exception_ptr ep_lower = nullptr, ep_upper = nullptr;
+
+  std::thread lower_thread, upper_thread;
 
   if (run_lower) {
-    lower_motor_thread = std::thread([&]() {
+    lower_thread = std::thread([&]() {
       try {
-        m_lower_motor.rotate(p_lower_dir, p_deg);
+        if (profiled)
+          m_lower_motor.rotate_profiled(lower_dir, lower_deg, lower_start,
+                                        lower_cruise, lower_end,
+                                        RAMP_UP_FRACTION, RAMP_DOWN_FRACTION);
+        else
+          m_lower_motor.rotate(lower_dir, lower_deg);
       } catch (...) {
-        ep_lower_motor = std::current_exception();
+        ep_lower = std::current_exception();
       }
     });
   }
 
   if (run_upper) {
-    upper_motor_thread = std::thread([&]() {
+    upper_thread = std::thread([&]() {
       try {
-        m_upper_motor.rotate(p_upper_dir, p_deg);
+        if (profiled)
+          m_upper_motor.rotate_profiled(upper_dir, upper_deg, upper_start,
+                                        upper_cruise, upper_end,
+                                        RAMP_UP_FRACTION, RAMP_DOWN_FRACTION);
+        else
+          m_upper_motor.rotate(upper_dir, upper_deg);
       } catch (...) {
-        ep_upper_motor = std::current_exception();
+        ep_upper = std::current_exception();
       }
     });
   }
 
-  if (run_lower)
-    lower_motor_thread.join();
-  if (run_upper)
-    upper_motor_thread.join();
+  if (lower_thread.joinable())
+    lower_thread.join();
+  if (upper_thread.joinable())
+    upper_thread.join();
 
-  if (ep_lower_motor) {
+  if (ep_lower) {
     try {
-      std::rethrow_exception(ep_lower_motor);
+      std::rethrow_exception(ep_lower);
     } catch (const std::exception &e) {
       throw std::runtime_error(std::string("Lower motor failed: ") + e.what());
     }
   }
-  if (ep_upper_motor) {
+  if (ep_upper) {
     try {
-      std::rethrow_exception(ep_upper_motor);
+      std::rethrow_exception(ep_upper);
     } catch (const std::exception &e) {
       throw std::runtime_error(std::string("Upper motor failed: ") + e.what());
     }
   }
 }
 
-// Public Functions
+bool gantry::move_relative(int dx, int dy) {
+  if (dx == 0 && dy == 0)
+    return true;
+
+  const int new_x = curr_x + dx;
+  const int new_y = curr_y + dy;
+
+  if (new_x < 0 || new_x > GANTRY_X_MAX_LENGTH || new_y < 0 ||
+      new_y > GANTRY_Y_MAX_LENGTH) {
+    throw std::runtime_error("Move goes out of bounds.");
+  }
+
+  // CoreXY mixing: convert (dx, dy) mm into per-motor signed degrees.
+  // Sign convention: +dx = East, +dy = North, matching move_x / move_y.
+  const float lower_signed = -float(dx) * X_DEG_TO_MM - float(dy) * Y_DEG_TO_MM;
+  const float upper_signed = -float(dx) * X_DEG_TO_MM + float(dy) * Y_DEG_TO_MM;
+
+  const float lower_deg = std::abs(lower_signed);
+  const float upper_deg = std::abs(upper_signed);
+
+  const uint8_t lower_dir = (lower_signed >= 0.0f) ? iSV57T::CW : iSV57T::CCW;
+  const uint8_t upper_dir = (upper_signed >= 0.0f) ? iSV57T::CW : iSV57T::CCW;
+
+  run_motors(lower_deg, lower_dir, upper_deg, upper_dir, /*profiled=*/true);
+
+  curr_x = new_x;
+  curr_y = new_y;
+
+  return true;
+}
+
+// Public functions
+
 gantry::gantry(iSV57T &p_lower_motor, iSV57T &p_upper_motor,
                limitSwitch &p_x_origin, limitSwitch &p_y_origin)
     : m_lower_motor(p_lower_motor), m_upper_motor(p_upper_motor),
       m_x_origin(p_x_origin), m_y_origin(p_y_origin) {}
 
 bool gantry::move_x(unsigned int p_mm, bool p_direction) {
-  // If a given input was 0 we don't need to move anywhere so the function is
-  // complete
   if (p_mm == 0)
     return true;
-
-  // Getting the degrees to rotate
-  float target_deg = float(p_mm) * X_DEG_TO_MM;
-  int new_x;
-  uint8_t target_dir;
-
-  // Gets the direction of the motors to spin to move East/West
-  if (p_direction) { // Moving East
-    target_dir = iSV57T::CCW;
-    new_x = curr_x + p_mm;
-  } else { // Moving West
-    target_dir = iSV57T::CW;
-    new_x = curr_x - p_mm;
-  }
-
-  // Checks if moving p_mm will go beyond out gantry's boundaries
-  if (new_x > GANTRY_X_MAX_LENGTH || new_x < 0) {
-    throw std::runtime_error(std::string("Unable to move to in x-axis by ") +
-                             std::to_string(p_mm) +
-                             std::string(" because it went out of bounds."));
-    return false;
-  }
-
-  rotate_motors(target_deg, target_dir, target_dir, MotorSelect::BOTH);
-
-  // Set curr_x position
-  curr_x = new_x;
-
-  return true; // Was able to move the run each motor on individual threads
-               // successfully
+  // true = West (decreasing x), false = East (increasing x)
+  const int dx = p_direction ? -int(p_mm) : int(p_mm);
+  return move_relative(dx, 0);
 }
 
 bool gantry::move_y(unsigned int p_mm, bool p_direction) {
-  // If a given input was 0 we don't need to move anywhere so the function is
-  // complete
   if (p_mm == 0)
     return true;
-
-  // Getting the degrees to rotate
-  float target_deg = float(p_mm) * Y_DEG_TO_MM;
-  int new_y;
-  uint8_t tar_lower_dir;
-  uint8_t tar_upper_dir;
-
-  // Gets the direction of the motors to spin to move East/West
-  if (p_direction) { // Moving North
-    tar_lower_dir = iSV57T::CCW;
-    tar_upper_dir = iSV57T::CW;
-    new_y = curr_y + p_mm;
-  } else { // Moving South
-    tar_lower_dir = iSV57T::CW;
-    tar_upper_dir = iSV57T::CCW;
-    new_y = curr_y - p_mm;
-  }
-
-  // Checks if moving p_mm will go beyond out gantry's boundaries
-  if (new_y > GANTRY_Y_MAX_LENGTH || new_y < 0) {
-    throw std::runtime_error(std::string("Unable to move to in y-axis by ") +
-                             std::to_string(p_mm) +
-                             std::string(" because it went out of bounds."));
-    return false;
-  }
-
-  rotate_motors(target_deg, tar_lower_dir, tar_upper_dir, MotorSelect::BOTH);
-
-  // Set curr_y position
-  curr_y = new_y;
-
-  return true;
+  // true = North (increasing y), false = South (decreasing y)
+  const int dy = p_direction ? int(p_mm) : -int(p_mm);
+  return move_relative(0, dy);
 }
 
 bool gantry::move_to_origin() {
   // Phase 1: move South until m_y_origin triggers
   float total_y_deg = 0.0f;
 
-  m_lower_motor.set_target_rpm(1000);
-  m_upper_motor.set_target_rpm(1000);
-
   while (m_y_origin.read() != 1) {
-    if (total_y_deg >= GANTRY_Y_MAX_ROTATIONS) {
+    if (total_y_deg >= GANTRY_Y_MAX_ROTATIONS)
       throw std::runtime_error(
           "Y-axis homing failed: limit switch not reached.");
-      return false;
-    }
-    rotate_motors(HOMING_STEP_DEG, iSV57T::CW, iSV57T::CCW,
-                  MotorSelect::BOTH); // Moving South
+    run_motors(HOMING_STEP_DEG, iSV57T::CW, HOMING_STEP_DEG, iSV57T::CCW,
+               /*profiled=*/false); // South
     total_y_deg += HOMING_STEP_DEG;
   }
 
-  // Phase 2: move East until m_x_origin triggers
+  // Phase 2: move West until m_x_origin triggers
   float total_x_deg = 0.0f;
+
   while (m_x_origin.read() != 1) {
-    if (total_x_deg >= GANTRY_X_MAX_ROTATIONS) {
+    if (total_x_deg >= GANTRY_X_MAX_ROTATIONS)
       throw std::runtime_error(
           "X-axis homing failed: limit switch not reached.");
-      return false;
-    }
-    rotate_motors(HOMING_STEP_DEG, iSV57T::CW, iSV57T::CW,
-                  MotorSelect::BOTH); // Moving West
+    run_motors(HOMING_STEP_DEG, iSV57T::CW, HOMING_STEP_DEG, iSV57T::CW,
+               /*profiled=*/false); // West
     total_x_deg += HOMING_STEP_DEG;
   }
 
@@ -183,808 +179,40 @@ bool gantry::move_to_origin() {
 
 bool gantry::move_to_coord(unsigned p_x_target, unsigned p_y_target) {
   if ((int)p_x_target > GANTRY_X_MAX_LENGTH ||
-      (int)p_y_target > GANTRY_Y_MAX_LENGTH) {
+      (int)p_y_target > GANTRY_Y_MAX_LENGTH)
     throw std::runtime_error("Target coordinate is out of bounds.");
-    return false;
-  }
 
-  int diff_x = (int)p_x_target - curr_x;
-  int diff_y = (int)p_y_target - curr_y;
-
-  // Use diagonal movement as much as possible, then finish with axis moves.
-  // Note: move_diagonal decomposes euclidean distance into integer mm deltas,
-  // so we recompute the residual diffs after the diagonal move.
-  const int diag_mm = std::min(std::abs(diff_x), std::abs(diff_y));
-  if (diag_mm != 0) {
-    uint8_t diag_dir;
-    // if (diff_x < 0 && diff_y < 0)      // East + South
-    //   diag_dir = 0;                    // SouthEast
-    // else if (diff_x > 0 && diff_y > 0) // West + North
-    //   diag_dir = 1;                    // NorthWest
-    // else if (diff_x > 0 && diff_y < 0) // West + South
-    //   diag_dir = 2;                    // SouthWest
-    // else                               // East + North
-    //   diag_dir = 3;                    // NorthEast
-    if (diff_x < 0 && diff_y < 0)      // West + South
-      diag_dir = 2;                    // SouthWest
-    else if (diff_x > 0 && diff_y > 0) // East + North
-      diag_dir = 3;                    // NorthEast
-    else if (diff_x > 0 && diff_y < 0) // East + South
-      diag_dir = 0;                    // SouthEast
-    else                               // West + North
-      diag_dir = 1;                    // NorthWest
-
-    //move_diagonal(diag_mm, diag_dir);
-
-    try {
-      move_diagonal(diag_mm, diag_dir);
-    } catch (const std::exception &e) {
-      std::cerr << "Diagonal move failed, falling back to x/y moves: "
-                << e.what() << "\n";
-    }
-
-    diff_x = (int)p_x_target - curr_x;
-    diff_y = (int)p_y_target - curr_y;
-  }
-
-  if (diff_x != 0)
-    move_x((unsigned int)std::abs(diff_x), (bool)(diff_x > 0));
-  if (diff_y != 0)
-    move_y((unsigned int)std::abs(diff_y), (bool)(diff_y > 0));
-
-  return true;
-
-  //  if ((int)p_x_target > GANTRY_X_MAX_LENGTH ||
-  //     (int)p_y_target > GANTRY_Y_MAX_LENGTH) {
-  //   throw std::runtime_error("Target coordinate is out of bounds.");
-  //   return false;
-  // }
-
-  // int diff_x = (int)p_x_target - curr_x;
-  // int diff_y = (int)p_y_target - curr_y;
-
-  // if (std::abs(diff_x) <= std::abs(diff_y)) {
-  //   if (diff_x != 0)
-  //     move_x((unsigned int)std::abs(diff_x), (bool)(diff_x > 0));
-  //   if (diff_y != 0)
-  //     move_y((unsigned int)std::abs(diff_y), (bool)(diff_y > 0));
-  // } else {
-  //   if (diff_y != 0)
-  //     move_y((unsigned int)std::abs(diff_y), (bool)(diff_y > 0));
-  //   if (diff_x != 0)
-  //     move_x((unsigned int)std::abs(diff_x), (bool)(diff_x > 0));
-  // }
-
-  // return true;
-}
-
-bool gantry::move_diagonal(int p_mm, uint8_t p_direction) {
-  if (p_mm == 0)
-    return true;
-
-  if (p_direction > 3)
-    throw std::runtime_error("Invalid diagonal direction: " +
-                             std::to_string(p_direction));
-
-  MotorSelect motor_select;
-  uint8_t lower_dir = 0;
-  uint8_t upper_dir = 0;
-  int x_sign, y_sign;
-
-  switch (p_direction) {
-  case 0: // SouthEast
-    motor_select = MotorSelect::UPPER_ONLY;
-    upper_dir = iSV57T::CCW;
-    x_sign = 1;
-    y_sign = -1;
-    break;
-  case 1: // NorthWest
-    motor_select = MotorSelect::UPPER_ONLY;
-    upper_dir = iSV57T::CW;
-    x_sign = -1;
-    y_sign = 1;
-    break;
-  case 2: // SouthWest
-    motor_select = MotorSelect::LOWER_ONLY;
-    lower_dir = iSV57T::CW;
-    x_sign = -1;
-    y_sign = -1;
-    break;
-  case 3: // NorthEast
-    motor_select = MotorSelect::LOWER_ONLY;
-    lower_dir = iSV57T::CCW;
-    x_sign = 1;
-    y_sign = 1;
-    break;
-  default:
-    return false;
-  }
-
-  // In CoreXY, when only one motor spins θ degrees, each belt (X and Y) moves
-  // θ/2 belt-degrees.  Converting belt-degrees to mm: X_mm = (θ/2)/X_DEG_TO_MM
-  // and Y_mm = (θ/2)/Y_DEG_TO_MM.  The euclidean travel distance is therefore:
-  //   p_mm = (θ/2) · √( inv_x² + inv_y² )   where inv_* = 1/DEG_TO_MM
-  // Rearranging gives θ = 2·p_mm / norm.
-  float inv_x = 1.0f / X_DEG_TO_MM;
-  float inv_y = 1.0f / Y_DEG_TO_MM;
-  float norm = std::sqrt(inv_x * inv_x + inv_y * inv_y);
-  float theta =
-      2.0f * float(p_mm) / norm; // degrees the selected motor must spin
-
-  // Decompose the euclidean distance into per-axis mm shifts using the same
-  // unit vector components (inv_x/norm and inv_y/norm).
-  int delta_x = (int)std::round(float(p_mm) * inv_x / norm);
-  int delta_y = (int)std::round(float(p_mm) * inv_y / norm);
-
-  // Apply directional signs to get the candidate destination coordinates.
-  int new_x = curr_x + x_sign * delta_x;
-  int new_y = curr_y + y_sign * delta_y;
-
-  // Checks if the we move out of bounds.
-  if (new_x < 0 || new_x > GANTRY_X_MAX_LENGTH || new_y < 0 ||
-      new_y > GANTRY_Y_MAX_LENGTH) {
-    throw std::runtime_error(std::string("Unable to move diagonally by ") +
-                             std::to_string(p_mm) +
-                             std::string(" mm because it went out of bounds."));
-    //return false;
-  }
-
-  rotate_motors(theta, lower_dir, upper_dir, motor_select);
-
-  // Update current position in the coordinate field
-  curr_x = new_x;
-  curr_y = new_y;
-
-  return true;
+  return move_relative((int)p_x_target - curr_x, (int)p_y_target - curr_y);
 }
 
 bool gantry::calibration_test() {
-  // Step 1 : Home to origin
   if (!move_to_origin())
     return false;
   std::this_thread::sleep_for(std::chrono::milliseconds(500));
 
-  // Step 2: Drive to X maximum (y = 0)
   if (!move_to_coord(GANTRY_X_MAX_LENGTH, 0))
     return false;
   std::this_thread::sleep_for(std::chrono::milliseconds(500));
 
-  // Step 3: Return to origin
   if (!move_to_coord(0, 0))
     return false;
   std::this_thread::sleep_for(std::chrono::milliseconds(500));
 
-  // Step 4: Drive to Y maximum (x = 0)
   if (!move_to_coord(0, GANTRY_Y_MAX_LENGTH))
     return false;
   std::this_thread::sleep_for(std::chrono::milliseconds(500));
 
-  // Step 5: Return to origin
   if (!move_to_coord(0, 0))
     return false;
   std::this_thread::sleep_for(std::chrono::milliseconds(500));
 
-  // Step 6: Drive to both X and Y maximum
   if (!move_to_coord(GANTRY_X_MAX_LENGTH, GANTRY_Y_MAX_LENGTH))
     return false;
   std::this_thread::sleep_for(std::chrono::milliseconds(500));
 
-  // Step 7: Return to origin
   if (!move_to_coord(0, 0))
     return false;
   std::this_thread::sleep_for(std::chrono::milliseconds(500));
 
   return true;
 }
-
-bool gantry::move_to_rest_point() {
-  // Move directly from the current position to the rest point.
-  const unsigned rest_x = GANTRY_X_MAX_LENGTH / 2;
-  const unsigned rest_y = 0;
-
-  move_to_coord(rest_x, rest_y);
-  return true;
-}
-
-
-// #include "gantry.hpp"
-
-// #include <cerrno>
-// #include <chrono>
-// #include <cmath>
-// #include <cstdint>
-// #include <cstring>
-// #include <gpiod.h>
-// #include <stdexcept>
-// #include <string>
-// #include <thread>
-
-// // Private Functions
-// void gantry::rotate_motors(float p_deg, uint8_t p_lower_dir,
-//                            uint8_t p_upper_dir, MotorSelect p_select) {
-//   std::exception_ptr ep_lower_motor = nullptr, ep_upper_motor = nullptr;
-
-//   const bool run_lower =
-//       (p_select == MotorSelect::BOTH || p_select == MotorSelect::LOWER_ONLY);
-//   const bool run_upper =
-//       (p_select == MotorSelect::BOTH || p_select == MotorSelect::UPPER_ONLY);
-
-//   std::thread lower_motor_thread, upper_motor_thread;
-
-//   if (run_lower) {
-//     lower_motor_thread = std::thread([&]() {
-//       try {
-//         m_lower_motor.rotate(p_lower_dir, p_deg);
-//       } catch (...) {
-//         ep_lower_motor = std::current_exception();
-//       }
-//     });
-//   }
-
-//   if (run_upper) {
-//     upper_motor_thread = std::thread([&]() {
-//       try {
-//         m_upper_motor.rotate(p_upper_dir, p_deg);
-//       } catch (...) {
-//         ep_upper_motor = std::current_exception();
-//       }
-//     });
-//   }
-
-//   if (run_lower)
-//     lower_motor_thread.join();
-//   if (run_upper)
-//     upper_motor_thread.join();
-
-//   if (ep_lower_motor) {
-//     try {
-//       std::rethrow_exception(ep_lower_motor);
-//     } catch (const std::exception &e) {
-//       throw std::runtime_error(std::string("Lower motor failed: ") + e.what());
-//     }
-//   }
-//   if (ep_upper_motor) {
-//     try {
-//       std::rethrow_exception(ep_upper_motor);
-//     } catch (const std::exception &e) {
-//       throw std::runtime_error(std::string("Upper motor failed: ") + e.what());
-//     }
-//   }
-// }
-
-// // Public Functions
-// gantry::gantry(iSV57T &p_lower_motor, iSV57T &p_upper_motor,
-//                limitSwitch &p_x_origin, limitSwitch &p_y_origin)
-//     : m_lower_motor(p_lower_motor), m_upper_motor(p_upper_motor),
-//       m_x_origin(p_x_origin), m_y_origin(p_y_origin) {}
-
-// bool gantry::move_x(unsigned int p_mm, bool p_direction) {
-//   // If a given input was 0 we don't need to move anywhere so the function is
-//   // complete
-//   if (p_mm == 0)
-//     return true;
-
-//   // Getting the degrees to rotate
-//   float target_deg = float(p_mm) * X_DEG_TO_MM;
-//   int new_x;
-//   uint8_t target_dir;
-
-//   // Gets the direction of the motors to spin to move East/West
-//   if (p_direction) { // Moving West
-//     target_dir = iSV57T::CW;
-//     new_x = curr_x + p_mm;
-//   } else { // Moving East
-//     target_dir = iSV57T::CCW;
-//     new_x = curr_x - p_mm;
-//   }
-
-//   // Checks if moving p_mm will go beyond out gantry's boundaries
-//   if (new_x > GANTRY_X_MAX_LENGTH || new_x < 0) {
-//     throw std::runtime_error(std::string("Unable to move to in x-axis by ") +
-//                              std::to_string(p_mm) +
-//                              std::string(" because it went out of bounds."));
-//     return false;
-//   }
-
-//   rotate_motors(target_deg, target_dir, target_dir, MotorSelect::BOTH);
-
-//   // Set curr_x position
-//   curr_x = new_x;
-
-//   return true; // Was able to move the run each motor on individual threads
-//                // successfully
-// }
-
-// bool gantry::move_y(unsigned int p_mm, bool p_direction) {
-//   // If a given input was 0 we don't need to move anywhere so the function is
-//   // complete
-//   if (p_mm == 0)
-//     return true;
-
-//   // Getting the degrees to rotate
-//   float target_deg = float(p_mm) * Y_DEG_TO_MM;
-//   int new_y;
-//   uint8_t tar_lower_dir;
-//   uint8_t tar_upper_dir;
-
-//   // Gets the direction of the motors to spin to move East/West
-//   if (p_direction) { // Moving North
-//     tar_lower_dir = iSV57T::CCW;
-//     tar_upper_dir = iSV57T::CW;
-//     new_y = curr_y + p_mm;
-//   } else { // Moving South
-//     tar_lower_dir = iSV57T::CW;
-//     tar_upper_dir = iSV57T::CCW;
-//     new_y = curr_y - p_mm;
-//   }
-
-//   // Checks if moving p_mm will go beyond out gantry's boundaries
-//   if (new_y > GANTRY_Y_MAX_LENGTH || new_y < 0) {
-//     throw std::runtime_error(std::string("Unable to move to in y-axis by ") +
-//                              std::to_string(p_mm) +
-//                              std::string(" because it went out of bounds."));
-//     return false;
-//   }
-
-//   rotate_motors(target_deg, tar_lower_dir, tar_upper_dir, MotorSelect::BOTH);
-
-//   // Set curr_y position
-//   curr_y = new_y;
-
-//   return true;
-// }
-
-// bool gantry::move_to_origin() {
-//   // Phase 1: move South until m_y_origin triggers
-//   float total_y_deg = 0.0f;
-
-//   m_lower_motor.set_target_rpm(1000);
-//   m_upper_motor.set_target_rpm(1000);
-
-//   while (m_y_origin.read() != 1) {
-//     if (total_y_deg >= GANTRY_Y_MAX_ROTATIONS) {
-//       throw std::runtime_error(
-//           "Y-axis homing failed: limit switch not reached.");
-//       return false;
-//     }
-//     rotate_motors(HOMING_STEP_DEG, iSV57T::CW, iSV57T::CCW,
-//                   MotorSelect::BOTH); // Moving South
-//     total_y_deg += HOMING_STEP_DEG;
-//   }
-
-//   // Phase 2: move East until m_x_origin triggers
-//   float total_x_deg = 0.0f;
-//   while (m_x_origin.read() != 1) {
-//     if (total_x_deg >= GANTRY_X_MAX_ROTATIONS) {
-//       throw std::runtime_error(
-//           "X-axis homing failed: limit switch not reached.");
-//       return false;
-//     }
-//     rotate_motors(HOMING_STEP_DEG, iSV57T::CCW, iSV57T::CCW,
-//                   MotorSelect::BOTH); // Moving East
-//     total_x_deg += HOMING_STEP_DEG;
-//   }
-
-//   curr_x = 0;
-//   curr_y = 0;
-//   return true;
-// }
-
-// // bool gantry::move_to_coord(unsigned p_x_target, unsigned p_y_target) {
-// //   if ((int)p_x_target > GANTRY_X_MAX_LENGTH ||
-// //       (int)p_y_target > GANTRY_Y_MAX_LENGTH) {
-// //     throw std::runtime_error("Target coordinate is out of bounds.");
-// //     return false;
-// //   }
-
-// //   int diff_x = (int)p_x_target - curr_x;
-// //   int diff_y = (int)p_y_target - curr_y;
-
-// //   if (std::abs(diff_x) <= std::abs(diff_y)) {
-// //     if (diff_x != 0)
-// //       move_x((unsigned int)std::abs(diff_x), (bool)(diff_x > 0));
-// //     if (diff_y != 0)
-// //       move_y((unsigned int)std::abs(diff_y), (bool)(diff_y > 0));
-// //   } else {
-// //     if (diff_y != 0)
-// //       move_y((unsigned int)std::abs(diff_y), (bool)(diff_y > 0));
-// //     if (diff_x != 0)
-// //       move_x((unsigned int)std::abs(diff_x), (bool)(diff_x > 0));
-// //   }
-
-// //   return true;
-// // }
-
-// bool gantry::move_to_coord(unsigned p_x_target, unsigned p_y_target) {
-//   if ((int)p_x_target > GANTRY_X_MAX_LENGTH ||
-//       (int)p_y_target > GANTRY_Y_MAX_LENGTH) {
-//     throw std::runtime_error("Target coordinate is out of bounds.");
-//     return false;
-//   }
-
-//   int diff_x = (int)p_x_target - curr_x;
-//   int diff_y = (int)p_y_target - curr_y;
-
-//   // Use diagonal movement as much as possible, then finish with axis moves.
-//   // Note: move_diagonal decomposes euclidean distance into integer mm deltas,
-//   // so we recompute the residual diffs after the diagonal move.
-//   const int diag_mm = std::min(std::abs(diff_x), std::abs(diff_y));
-//   if (diag_mm != 0) {
-//     uint8_t diag_dir;
-//     if (diff_x < 0 && diff_y < 0)      // East + South
-//       diag_dir = 0;                    // SouthEast
-//     else if (diff_x > 0 && diff_y > 0) // West + North
-//       diag_dir = 1;                    // NorthWest
-//     else if (diff_x > 0 && diff_y < 0) // West + South
-//       diag_dir = 2;                    // SouthWest
-//     else                               // East + North
-//       diag_dir = 3;                    // NorthEast
-
-//     move_diagonal(diag_mm, diag_dir);
-
-//     diff_x = (int)p_x_target - curr_x;
-//     diff_y = (int)p_y_target - curr_y;
-//   }
-
-//   if (diff_x != 0)
-//     move_x((unsigned int)std::abs(diff_x), (bool)(diff_x > 0));
-//   if (diff_y != 0)
-//     move_y((unsigned int)std::abs(diff_y), (bool)(diff_y > 0));
-
-//   return true;
-// }
-
-// bool gantry::move_diagonal(int p_mm, uint8_t p_direction) {
-//   if (p_mm == 0)
-//     return true;
-
-//   if (p_direction > 3)
-//     throw std::runtime_error("Invalid diagonal direction: " +
-//                              std::to_string(p_direction));
-
-//   MotorSelect motor_select;
-//   uint8_t lower_dir = 0;
-//   uint8_t upper_dir = 0;
-//   int x_sign, y_sign;
-
-//   switch (p_direction) {
-//   case 0: // SouthEast
-//     motor_select = MotorSelect::UPPER_ONLY;
-//     upper_dir = iSV57T::CCW;
-//     x_sign = -1;
-//     y_sign = -1;
-//     break;
-//   case 1: // NorthWest
-//     motor_select = MotorSelect::UPPER_ONLY;
-//     upper_dir = iSV57T::CW;
-//     x_sign = 1;
-//     y_sign = 1;
-//     break;
-//   case 2: // SouthWest
-//     motor_select = MotorSelect::LOWER_ONLY;
-//     lower_dir = iSV57T::CW;
-//     x_sign = 1;
-//     y_sign = -1;
-//     break;
-//   case 3: // NorthEast
-//     motor_select = MotorSelect::LOWER_ONLY;
-//     lower_dir = iSV57T::CCW;
-//     x_sign = -1;
-//     y_sign = 1;
-//     break;
-//   default:
-//     return false;
-//   }
-
-//   // In CoreXY, when only one motor spins θ degrees, each belt (X and Y) moves
-//   // θ/2 belt-degrees.  Converting belt-degrees to mm: X_mm = (θ/2)/X_DEG_TO_MM
-//   // and Y_mm = (θ/2)/Y_DEG_TO_MM.  The euclidean travel distance is therefore:
-//   //   p_mm = (θ/2) · √( inv_x² + inv_y² )   where inv_* = 1/DEG_TO_MM
-//   // Rearranging gives θ = 2·p_mm / norm.
-//   float inv_x = 1.0f / X_DEG_TO_MM;
-//   float inv_y = 1.0f / Y_DEG_TO_MM;
-//   float norm = std::sqrt(inv_x * inv_x + inv_y * inv_y);
-//   float theta =
-//       2.0f * float(p_mm) / norm; // degrees the selected motor must spin
-
-//   // Decompose the euclidean distance into per-axis mm shifts using the same
-//   // unit vector components (inv_x/norm and inv_y/norm).
-//   int delta_x = (int)std::round(float(p_mm) * inv_x / norm);
-//   int delta_y = (int)std::round(float(p_mm) * inv_y / norm);
-
-//   // Apply directional signs to get the candidate destination coordinates.
-//   int new_x = curr_x + x_sign * delta_x;
-//   int new_y = curr_y + y_sign * delta_y;
-
-//   // Checks if the we move out of bounds.
-//   if (new_x < 0 || new_x > GANTRY_X_MAX_LENGTH || new_y < 0 ||
-//       new_y > GANTRY_Y_MAX_LENGTH) {
-//     throw std::runtime_error(std::string("Unable to move diagonally by ") +
-//                              std::to_string(p_mm) +
-//                              std::string(" mm because it went out of bounds."));
-//     return false;
-//   }
-
-//   rotate_motors(theta, lower_dir, upper_dir, motor_select);
-
-//   // Update current position in the coordinate field
-//   curr_x = new_x;
-//   curr_y = new_y;
-
-//   return true;
-// }
-
-// bool gantry::calibration_test() {
-//   // Step 1 : Home to origin
-//   if (!move_to_origin())
-//     return false;
-//   std::this_thread::sleep_for(std::chrono::milliseconds(500));
-
-//   // Step 2: Drive to X maximum (y = 0)
-//   if (!move_to_coord(GANTRY_X_MAX_LENGTH, 0))
-//     return false;
-//   std::this_thread::sleep_for(std::chrono::milliseconds(500));
-
-//   // Step 3: Return to origin
-//   if (!move_to_coord(0, 0))
-//     return false;
-//   std::this_thread::sleep_for(std::chrono::milliseconds(500));
-
-//   // Step 4: Drive to Y maximum (x = 0)
-//   if (!move_to_coord(0, GANTRY_Y_MAX_LENGTH))
-//     return false;
-//   std::this_thread::sleep_for(std::chrono::milliseconds(500));
-
-//   // Step 5: Return to origin
-//   if (!move_to_coord(0, 0))
-//     return false;
-//   std::this_thread::sleep_for(std::chrono::milliseconds(500));
-
-//   // Step 6: Drive to both X and Y maximum
-//   if (!move_to_coord(GANTRY_X_MAX_LENGTH, GANTRY_Y_MAX_LENGTH))
-//     return false;
-//   std::this_thread::sleep_for(std::chrono::milliseconds(500));
-
-//   // Step 7: Return to origin
-//   if (!move_to_coord(0, 0))
-//     return false;
-//   std::this_thread::sleep_for(std::chrono::milliseconds(500));
-
-//   return true;
-// }
-
-// bool gantry::move_to_rest_point() {
-//   // Move directly from the current position to the rest point.
-//   const unsigned rest_x = GANTRY_X_MAX_LENGTH / 2;
-//   const unsigned rest_y = 0;
-
-//   move_to_coord(rest_x, rest_y);
-//   return true;
-// }
-
-
-// // #include "gantry.hpp"
-
-// // #include <cerrno>
-// // #include <chrono>
-// // #include <cmath>
-// // #include <cstdint>
-// // #include <cstring>
-// // #include <gpiod.h>
-// // #include <stdexcept>
-// // #include <string>
-// // #include <thread>
-
-// // // Private Functions
-// // void gantry::rotate_motors(float p_deg, uint8_t p_lower_dir,
-// //                            uint8_t p_upper_dir, MotorSelect p_select) {
-// //   std::exception_ptr ep_lower_motor = nullptr, ep_upper_motor = nullptr;
-
-// //   const bool run_lower =
-// //       (p_select == MotorSelect::BOTH || p_select == MotorSelect::LOWER_ONLY);
-// //   const bool run_upper =
-// //       (p_select == MotorSelect::BOTH || p_select == MotorSelect::UPPER_ONLY);
-
-// //   std::thread lower_motor_thread, upper_motor_thread;
-
-// //   if (run_lower) {
-// //     lower_motor_thread = std::thread([&]() {
-// //       try {
-// //         m_lower_motor.rotate(p_lower_dir, p_deg);
-// //       } catch (...) {
-// //         ep_lower_motor = std::current_exception();
-// //       }
-// //     });
-// //   }
-
-// //   if (run_upper) {
-// //     upper_motor_thread = std::thread([&]() {
-// //       try {
-// //         m_upper_motor.rotate(p_upper_dir, p_deg);
-// //       } catch (...) {
-// //         ep_upper_motor = std::current_exception();
-// //       }
-// //     });
-// //   }
-
-// //   if (run_lower)
-// //     lower_motor_thread.join();
-// //   if (run_upper)
-// //     upper_motor_thread.join();
-
-// //   if (ep_lower_motor) {
-// //     try {
-// //       std::rethrow_exception(ep_lower_motor);
-// //     } catch (const std::exception &e) {
-// //       throw std::runtime_error(std::string("Lower motor failed: ") + e.what());
-// //     }
-// //   }
-// //   if (ep_upper_motor) {
-// //     try {
-// //       std::rethrow_exception(ep_upper_motor);
-// //     } catch (const std::exception &e) {
-// //       throw std::runtime_error(std::string("Upper motor failed: ") + e.what());
-// //     }
-// //   }
-// // }
-
-// // // Public Functions
-// // gantry::gantry(iSV57T &p_lower_motor, iSV57T &p_upper_motor,
-// //                limitSwitch &p_x_origin, limitSwitch &p_y_origin)
-// //     : m_lower_motor(p_lower_motor), m_upper_motor(p_upper_motor),
-// //       m_x_origin(p_x_origin), m_y_origin(p_y_origin) {}
-
-// // bool gantry::move_x(unsigned int p_mm, bool p_direction) {
-// //   // If a given input was 0 we don't need to move anywhere so the function is
-// //   // complete
-// //   if (p_mm == 0)
-// //     return true;
-
-// //   // Getting the degrees to rotate
-// //   float target_deg = float(p_mm) * X_DEG_TO_MM;
-// //   int new_x;
-// //   uint8_t target_dir;
-
-// //   // Gets the direction of the motors to spin to move East/West
-// //   if (p_direction) { // Moving West
-// //     target_dir = iSV57T::CW;
-// //     new_x = curr_x + p_mm;
-// //   } else { // Moving East
-// //     target_dir = iSV57T::CCW;
-// //     new_x = curr_x - p_mm;
-// //   }
-
-// //   // Checks if moving p_mm will go beyond out gantry's boundaries
-// //   if (new_x > GANTRY_X_MAX_LENGTH || new_x < 0) {
-// //     throw std::runtime_error(std::string("Unable to move to in x-axis by ") +
-// //                              std::to_string(p_mm) +
-// //                              std::string(" because it went out of bounds."));
-// //     return false;
-// //   }
-
-// //   rotate_motors(target_deg, target_dir, target_dir, MotorSelect::BOTH);
-
-// //   // Set curr_x position
-// //   curr_x = new_x;
-
-// //   return true; // Was able to move the run each motor on individual threads
-// //                // successfully
-// // }
-
-// // bool gantry::move_y(unsigned int p_mm, bool p_direction) {
-// //   // If a given input was 0 we don't need to move anywhere so the function is
-// //   // complete
-// //   if (p_mm == 0)
-// //     return true;
-
-// //   // Getting the degrees to rotate
-// //   float target_deg = float(p_mm) * Y_DEG_TO_MM;
-// //   int new_y;
-// //   uint8_t tar_lower_dir;
-// //   uint8_t tar_upper_dir;
-
-// //   // Gets the direction of the motors to spin to move East/West
-// //   if (p_direction) { // Moving North
-// //     tar_lower_dir = iSV57T::CCW;
-// //     tar_upper_dir = iSV57T::CW;
-// //     new_y = curr_y + p_mm;
-// //   } else { // Moving South
-// //     tar_lower_dir = iSV57T::CW;
-// //     tar_upper_dir = iSV57T::CCW;
-// //     new_y = curr_y - p_mm;
-// //   }
-
-// //   // Checks if moving p_mm will go beyond out gantry's boundaries
-// //   if (new_y > GANTRY_Y_MAX_LENGTH || new_y < 0) {
-// //     throw std::runtime_error(std::string("Unable to move to in y-axis by ") +
-// //                              std::to_string(p_mm) +
-// //                              std::string(" because it went out of bounds."));
-// //     return false;
-// //   }
-
-// //   rotate_motors(target_deg, tar_lower_dir, tar_upper_dir, MotorSelect::BOTH);
-
-// //   curr_y = new_y;
-
-// //   return true;
-// // }
-
-// // bool gantry::move_to_origin() {
-// //   // Phase 1: move South until m_y_origin triggers
-// //   float total_y_deg = 0.0f;
-
-// //   while (m_y_origin.read() != 1) {
-// //     if (total_y_deg >= GANTRY_Y_MAX_ROTATIONS) {
-// //       throw std::runtime_error(
-// //           "Y-axis homing failed: limit switch not reached.");
-// //       return false;
-// //     }
-// //     rotate_motors(HOMING_STEP_DEG, iSV57T::CW, iSV57T::CCW,
-// //                   MotorSelect::BOTH); // Moving South
-// //     total_y_deg += HOMING_STEP_DEG;
-// //   }
-
-// //   // Phase 2: move East until m_x_origin triggers
-// //   float total_x_deg = 0.0f;
-// //   while (m_x_origin.read() != 1) {
-// //     if (total_x_deg >= GANTRY_X_MAX_ROTATIONS) {
-// //       throw std::runtime_error(
-// //           "X-axis homing failed: limit switch not reached.");
-// //       return false;
-// //     }
-// //     rotate_motors(HOMING_STEP_DEG, iSV57T::CCW, iSV57T::CCW,
-// //                   MotorSelect::BOTH); // Moving East
-// //     total_x_deg += HOMING_STEP_DEG;
-// //   }
-
-// //   curr_x = 0;
-// //   curr_y = 0;
-// //   return true;
-// // }
-
-// // bool gantry::move_to_coord(unsigned p_x_target, unsigned p_y_target) {
-// //   if ((int)p_x_target > GANTRY_X_MAX_LENGTH ||
-// //       (int)p_y_target > GANTRY_Y_MAX_LENGTH) {
-// //     throw std::runtime_error("Target coordinate is out of bounds.");
-// //     return false;
-// //   }
-
-// //   int diff_x = (int)p_x_target - curr_x;
-// //   int diff_y = (int)p_y_target - curr_y;
-
-// //   if (std::abs(diff_x) <= std::abs(diff_y)) {
-// //     if (diff_x != 0)
-// //       move_x((unsigned int)std::abs(diff_x), (bool)(diff_x > 0));
-// //     if (diff_y != 0)
-// //       move_y((unsigned int)std::abs(diff_y), (bool)(diff_y > 0));
-// //   } else {
-// //     if (diff_y != 0)
-// //       move_y((unsigned int)std::abs(diff_y), (bool)(diff_y > 0));
-// //     if (diff_x != 0)
-// //       move_x((unsigned int)std::abs(diff_x), (bool)(diff_x > 0));
-// //   }
-
-// //   return true;
-// // }
-
-// // // bool gantry::move_to_rest_point() {
-// // //   // First home the gantry to establish a known origin.
-// // //   move_to_origin();
-
-// // //   // Then move to the rest point at the middle of the X axis, Y staying at 0.
-// // //   const unsigned rest_x = GANTRY_X_MAX_LENGTH / 2;
-
-// // //   // From origin, moving positive X means moving West in this coordinate system.
-// // //   move_x(rest_x, true);
-
-// // //   return true;
-// // // }
-
-// // bool gantry::move_to_rest_point() {
-// //   // Move directly from the current position to the rest point.
-// //   const unsigned rest_x = GANTRY_X_MAX_LENGTH / 2;
-// //   const unsigned rest_y = 0;
-
-// //   move_to_coord(rest_x, rest_y);
-// //   return true;
-// // }

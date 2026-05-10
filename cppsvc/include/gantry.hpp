@@ -16,6 +16,13 @@ static constexpr int GANTRY_X_MAX_ROTATIONS =
 static constexpr int GANTRY_Y_MAX_ROTATIONS =
     8095; // North-South from play side POV; Units in degrees
 static constexpr float HOMING_STEP_DEG = 10.0f;
+
+static constexpr float RAMP_BASE_RPM       = 1200.0f;
+static constexpr float RAMP_START_RPM_FRAC = 0.25f;
+static constexpr float RAMP_END_RPM_FRAC   = 0.25f;
+static constexpr float RAMP_UP_FRACTION    = 0.20f;
+static constexpr float RAMP_DOWN_FRACTION  = 0.20f;
+
 static constexpr float X_DEG_TO_MM =
     float(GANTRY_X_MAX_ROTATIONS) /
     float(GANTRY_X_MAX_LENGTH); // Ratio to define how many degrees to move 1
@@ -172,14 +179,14 @@ private:
 //   void rotate_motors(float p_deg, uint8_t p_lower_dir, uint8_t p_upper_dir,
 //                      MotorSelect p_select);
 
+  void run_motors(float lower_deg, uint8_t lower_dir,
+                  float upper_deg, uint8_t upper_dir, bool profiled);
+  bool move_relative(int dx, int dy);
+
   iSV57T &m_lower_motor;
   iSV57T &m_upper_motor;
   limitSwitch &m_x_origin;
   limitSwitch &m_y_origin;
-
-  // Let's deal with whole numbers for simiplicity
-  //int curr_x;
-  //int curr_y;
 };
 
 
