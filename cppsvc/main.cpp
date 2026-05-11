@@ -30,11 +30,13 @@ static constexpr int DEFENSIVE_Y_MM   = 145;
 static constexpr int REST_X_MM        = MALLET_HOME_X_MM;
 
 // Safety hard limits — mallet never crosses these regardless of what Python sends.
-// X range: allow full ±475 mm travel from home (= [0, 950] given home=475).
-// Y min: defensive line (mallet never goes south of it).
 static constexpr int X_SAFE_MIN_MM    = 0;
 static constexpr int X_SAFE_MAX_MM    = MALLET_HOME_X_MM + 475;  // 950
 static constexpr int Y_SAFE_MIN_MM    = DEFENSIVE_Y_MM;
+
+// Smallest motor move we'll bother executing.  Tight value -> mallet
+// continuously refines its target as the puck approaches.
+static constexpr int MIN_MOVE_MM      = 5;   // 0.5 cm
 
 // ----------------------------------------------------------------------------
 // WIRE FORMAT - must match ipc.py exactly
@@ -102,8 +104,8 @@ static bool read_stable(const shm_xy *p, uint32_t &last_seq,
   return true;
 }
 
-// Convert mallet-relative x_mm to gantry-frame X in mm, clamped to travel.
-// (No unit scaling -- both sides speak mm now.)
+// Convert mallet-relative x_mm (camera frame) to gantry-frame X in mm.
+// Camera's +x and gantry's +x agree on this rig.
 static int mallet_x_to_gantry_x(double x_mm) {
   long r = std::lround(static_cast<double>(MALLET_HOME_X_MM) + x_mm);
   if (r < X_SAFE_MIN_MM) r = X_SAFE_MIN_MM;
@@ -164,8 +166,8 @@ int main() {
   iSV57T m_upper = iSV57T(chip0, m2_dir_line, m2_pul_line, pulse_per_rev);
 
   try {
-    m_lower.set_target_rpm(900);
-    m_upper.set_target_rpm(900);
+    m_lower.set_target_rpm(1300);
+    m_upper.set_target_rpm(1300);
   } catch (const std::exception &e) {
     std::cerr << "Failed to set target RPM: " << e.what() << "\n";
     gpiod_chip_close(chip4);
@@ -245,6 +247,7 @@ int main() {
       switch (kind) {
         case KIND_DEFEND: {
           int target_x = mallet_x_to_gantry_x(x_mm);
+          if (std::abs(target_x - g.curr_x) < MIN_MOVE_MM) break;
           g.move_to_coord(static_cast<unsigned>(target_x),
                           safe_y(DEFENSIVE_Y_MM));
           std::cout << "[C++] DEFEND  x_mm=" << x_mm
@@ -253,6 +256,8 @@ int main() {
         }
         case KIND_IGNORE:
         case KIND_NO_TRACK:
+          // Snap back to home as soon as the puck leaves the zone or is lost,
+          // even for short distances — don't loiter near the last DEFEND target.
           if (g.curr_x != REST_X_MM) {
             g.move_to_coord(static_cast<unsigned>(REST_X_MM),
                             safe_y(DEFENSIVE_Y_MM));

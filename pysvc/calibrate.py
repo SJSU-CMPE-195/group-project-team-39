@@ -7,11 +7,11 @@ from scipy.interpolate import RBFInterpolator
 # ==============================================================================
 # SETTINGS — must match nam.py
 # ==============================================================================
-CAPTURE_W = 2560        # native stereo output: 2x(1280x720)
-CAPTURE_H = 720
-FRAME_W   = CAPTURE_W // 2   # 1280, after cropping to left eye
-FRAME_H   = CAPTURE_H        # 720
-GRAB_R    = 22
+CAPTURE_WIDTH  = 2560        # native stereo output: 2x(1280x720)
+CAPTURE_HEIGHT = 720
+FRAME_WIDTH    = CAPTURE_WIDTH // 2   # 1280, after cropping to left eye
+FRAME_HEIGHT   = CAPTURE_HEIGHT       # 720
+GRAB_R         = 22
 
 # Remap output (matches nam.py — pre-rotation, landscape)
 PREVIEW_W = 510
@@ -25,18 +25,22 @@ CRITICAL_ZONE_H_CM = 35.0
 # ==============================================================================
 # HANDLE GROUPS
 # ==============================================================================
-# 8 remap points (TL, T-mid, TR, R-mid, BR, B-mid, BL, L-mid)
-remap_pts = [
-    [int(FRAME_W * 0.15), int(FRAME_H * 0.10)],   # 0 TL
-    [int(FRAME_W * 0.50), int(FRAME_H * 0.05)],   # 1 T-mid
-    [int(FRAME_W * 0.85), int(FRAME_H * 0.10)],   # 2 TR
-    [int(FRAME_W * 0.90), int(FRAME_H * 0.50)],   # 3 R-mid
-    [int(FRAME_W * 0.85), int(FRAME_H * 0.90)],   # 4 BR
-    [int(FRAME_W * 0.50), int(FRAME_H * 0.95)],   # 5 B-mid
-    [int(FRAME_W * 0.15), int(FRAME_H * 0.90)],   # 6 BL
-    [int(FRAME_W * 0.10), int(FRAME_H * 0.50)],   # 7 L-mid
-]
-REMAP_LABELS = ["TL", "T-mid", "TR", "R-mid", "BR", "B-mid", "BL", "L-mid"]
+# 6 remap points (TL, T-mid, TR, BR, B-mid, BL).
+# Positions are filled in once the camera reports its real frame size, so
+# the handles are guaranteed to land inside the visible image.
+remap_pts    = [[0, 0] for _ in range(6)]
+REMAP_LABELS = ["TL", "T-mid", "TR", "BR", "B-mid", "BL"]
+
+def _default_remap_pts(w, h):
+    """Place all 6 handles well inside a (w x h) frame."""
+    return [
+        [int(w * 0.25), int(h * 0.15)],   # 0 TL
+        [int(w * 0.50), int(h * 0.10)],   # 1 T-mid
+        [int(w * 0.75), int(h * 0.15)],   # 2 TR
+        [int(w * 0.75), int(h * 0.85)],   # 3 BR
+        [int(w * 0.50), int(h * 0.90)],   # 4 B-mid
+        [int(w * 0.25), int(h * 0.85)],   # 5 BL
+    ]
 REMAP_COLOR  = (0, 220, 180)        # teal
 
 # These three handles work in PREVIEW (rotated) coordinate space.
@@ -54,20 +58,22 @@ drag_target = None    # ("remap", idx) or ("mallet", None) or ("crit_tl"/"crit_b
 remap_dirty = True
 _map_x = _map_y = None
 
+# Real displayed frame size — set once the first frame is captured.
+disp_w = FRAME_WIDTH
+disp_h = FRAME_HEIGHT
+
 
 # ==============================================================================
 # DST points for the remap (matches main.py)
 # ==============================================================================
 def _dst_points():
     return np.array([
-        [0,               0              ],
-        [PREVIEW_W // 2,  0              ],
-        [PREVIEW_W - 1,   0              ],
-        [PREVIEW_W - 1,   PREVIEW_H // 2 ],
-        [PREVIEW_W - 1,   PREVIEW_H - 1  ],
-        [PREVIEW_W // 2,  PREVIEW_H - 1  ],
-        [0,               PREVIEW_H - 1  ],
-        [0,               PREVIEW_H // 2 ],
+        [0,               0              ],   # TL
+        [PREVIEW_W // 2,  0              ],   # T-mid
+        [PREVIEW_W - 1,   0              ],   # TR
+        [PREVIEW_W - 1,   PREVIEW_H - 1  ],   # BR
+        [PREVIEW_W // 2,  PREVIEW_H - 1  ],   # B-mid
+        [0,               PREVIEW_H - 1  ],   # BL
     ], dtype=np.float64)
 
 
@@ -117,8 +123,8 @@ def mouse_raw(event, x, y, flags, param):
                 return
     elif event == cv2.EVENT_MOUSEMOVE and drag_target and drag_target[0] == "remap":
         idx = drag_target[1]
-        remap_pts[idx][0] = int(np.clip(x, 0, FRAME_W - 1))
-        remap_pts[idx][1] = int(np.clip(y, 0, FRAME_H - 1))
+        remap_pts[idx][0] = int(np.clip(x, 0, disp_w - 1))
+        remap_pts[idx][1] = int(np.clip(y, 0, disp_h - 1))
     elif event == cv2.EVENT_LBUTTONUP and drag_target and drag_target[0] == "remap":
         drag_target = None
         remap_dirty = True
@@ -224,16 +230,13 @@ def draw_preview(frame):
     return rotated
 
 
-# ==============================================================================
-# MAIN
-# ==============================================================================
 def main():
     global remap_dirty
 
     cap = open_camera()
     cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"MJPG"))
-    cap.set(cv2.CAP_PROP_FRAME_WIDTH,  CAPTURE_W)
-    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, CAPTURE_H)
+    cap.set(cv2.CAP_PROP_FRAME_WIDTH,  CAPTURE_WIDTH)
+    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, CAPTURE_HEIGHT)
     cap.set(cv2.CAP_PROP_FPS, 100)
 
     actual_w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
@@ -245,7 +248,7 @@ def main():
 
     cv2.namedWindow(win_raw,  cv2.WINDOW_NORMAL)
     cv2.namedWindow(win_prev, cv2.WINDOW_NORMAL)
-    cv2.resizeWindow(win_raw,  FRAME_W // 2,  FRAME_H // 2)
+    cv2.resizeWindow(win_raw,  FRAME_WIDTH // 2,  FRAME_HEIGHT // 2)
     cv2.resizeWindow(win_prev, PREVIEW_H,     PREVIEW_W)
     cv2.setMouseCallback(win_raw,  mouse_raw)
     cv2.setMouseCallback(win_prev, mouse_preview)
@@ -256,6 +259,26 @@ def main():
     print("                  drag the two blue CRIT corners to mark a 55cm × 35cm zone")
     print("                  (use your physical ruler on the table to size it)")
     print("Press  S  to save full config    ESC  to quit\n")
+
+    # Grab one frame so we know the ACTUAL displayed dimensions, then place
+    # the 6 remap handles inside it.  This avoids the off-screen-default bug
+    # when the camera reports a smaller frame than FRAME_WIDTH/FRAME_HEIGHT.
+    global disp_w, disp_h
+    ret, first_frame = cap.read()
+    if not ret:
+        raise RuntimeError("Couldn't read a frame from the camera.")
+    if first_frame.shape[1] >= CAPTURE_WIDTH:
+        first_frame = first_frame[:, :FRAME_WIDTH]
+    disp_h, disp_w = first_frame.shape[:2]
+    for i, pt in enumerate(_default_remap_pts(disp_w, disp_h)):
+        remap_pts[i][0] = pt[0]
+        remap_pts[i][1] = pt[1]
+    print(f"[INFO] Displayed frame size: {disp_w}x{disp_h}", flush=True)
+    print(f"[INFO] Handles placed inside frame.", flush=True)
+
+    # Size the RAW window to match the displayed frame so mouse coords
+    # always align with the image (OpenCV maps clicks to image space).
+    cv2.resizeWindow(win_raw, disp_w, disp_h)
 
     print("[INFO] Building initial preview...", flush=True)
     _build_remap()
@@ -268,8 +291,8 @@ def main():
 
         # Stereo cam outputs 2560x720 side-by-side; keep only the left eye
         # (matches what nam.py does in preprocess_frame).
-        if frame.shape[1] >= CAPTURE_W:
-            frame = frame[:, :FRAME_W]
+        if frame.shape[1] >= CAPTURE_WIDTH:
+            frame = frame[:, :FRAME_WIDTH]
 
         if remap_dirty:
             print("[INFO] Rebuilding remap...", flush=True)

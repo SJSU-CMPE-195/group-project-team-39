@@ -32,15 +32,14 @@ OUTPUT_W, OUTPUT_H = 510, 400
 # Order: TL, T-mid, TR, R-mid, BR, B-mid, BL, L-mid (clockwise)
 # ==============================================================================
 # SRC_POINTS in current FRAME_WIDTH x FRAME_HEIGHT pixel space (cropped left eye).
+# Order: TL, T-mid, TR, BR, B-mid, BL (6-point — no side midpoints).
 SRC_POINTS = [
-    (189.0, 54.0),   # TL
-    (539.0, 44.0),   # T-mid
-    (922.0, 47.0),   # TR
-    (925.0, 343.0),   # R-mid
-    (920.0, 650.0),   # BR
-    (548.0, 655.0),   # B-mid
-    (205.0, 653.0),   # BL
-    (192.0, 358.0),   # L-mid
+    (189.0,  54.0),  # TL
+    (539.0,  44.0),  # T-mid
+    (922.0,  47.0),  # TR
+    (920.0, 650.0),  # BR
+    (548.0, 655.0),  # B-mid
+    (205.0, 653.0),  # BL
 ]
 
 # ==============================================================================
@@ -56,14 +55,12 @@ PX_PER_CM_X = 3.6000
 PX_PER_CM_Y = 3.7143
 
 _DST_POINTS = np.array([
-    [0,              0             ],
-    [OUTPUT_W // 2,  0             ],
-    [OUTPUT_W - 1,   0             ],
-    [OUTPUT_W - 1,   OUTPUT_H // 2 ],
-    [OUTPUT_W - 1,   OUTPUT_H - 1  ],
-    [OUTPUT_W // 2,  OUTPUT_H - 1  ],
-    [0,              OUTPUT_H - 1  ],
-    [0,              OUTPUT_H // 2 ],
+    [0,              0            ],   # TL
+    [OUTPUT_W // 2,  0            ],   # T-mid
+    [OUTPUT_W - 1,   0            ],   # TR
+    [OUTPUT_W - 1,   OUTPUT_H - 1 ],   # BR
+    [OUTPUT_W // 2,  OUTPUT_H - 1 ],   # B-mid
+    [0,              OUTPUT_H - 1 ],   # BL
 ], dtype=np.float64)
 
 
@@ -115,16 +112,26 @@ DIR_ARROW_LEN            = 60
 UPDATE_INTERVAL          = 1.0
 MOVE_START_THRESH_PX     = 1
 TRACK_PAUSE_ON_MOVE_SEC  = 0.0
-MAX_BOUNCES              = 1
+MAX_BOUNCES              = 2
 MIN_SPEED_PX             = 4.0
 
 # ==============================================================================
 # TARGET OUTPUT — time-window median averaging
 # ==============================================================================
-BUFFER_WINDOW    = 0.1    # seconds — averaging window (smaller = faster reaction)
-PRINT_INTERVAL   = 0.03   # seconds — minimum time between publishes (~33 Hz)
-TARGET_DEADBAND  = 12     # px — ~3.3 cm at PX_PER_CM_X≈3.6; ignore micro-jitter
-DISPLAY_EMA_ALPHA = 0.35  # smoothing for the on-screen blue line
+BUFFER_WINDOW         = 0.15   # seconds — short, so anchor fires soon after entering zone
+PRINT_INTERVAL        = 0.02   # seconds — evaluate at 50 Hz
+MIN_BUFFER_FOR_COMMIT = 3      # need at least this many recent samples
+RECENT_N              = 3      # how many of the most-recent samples form the "converged" set
+CONVERGE_SPREAD_PX    = 18     # the most recent N samples must agree within this band
+
+# "Anchor-and-refine" deadbands.
+#  - First commit (anchor): fired as soon as predictions converge.
+#  - Subsequent commits (refine): only if prediction shifted by >= REFINE_DEADBAND.
+#    Smaller jitter is ignored, so the mallet doesn't oscillate.
+ANCHOR_DEADBAND_PX    = 12     # tight first-commit threshold (~3 cm)
+REFINE_DEADBAND_PX    = 30     # ~8 cm — only big course-corrections re-fire
+
+DISPLAY_EMA_ALPHA     = 0.40   # on-screen line smoothing
 
 # ==============================================================================
 # COLORS
@@ -398,6 +405,7 @@ def main():
             kalman, kalman_initialized, still_count = create_kalman(), False, 0
             prediction_buffer.clear()
             display_ema = None
+            last_committed_target = None  # next trajectory starts fresh
             publisher.publish(KIND_NO_TRACK)
             continue
 
@@ -491,29 +499,63 @@ def main():
         cutoff = now - BUFFER_WINDOW
         prediction_buffer = [e for e in prediction_buffer if e[2] >= cutoff]
 
-        # ── Print median once every PRINT_INTERVAL ─────────────────────────
+        # ── Buffer empty, mallet still parked at a DEFEND target? Send the
+        #    mallet home.  Happens when the puck is in view but moving too
+        #    slowly to generate trajectory predictions (speed < MIN_SPEED_PX),
+        #    or when the puck stops moving entirely.
         if (now - last_print_time >= PRINT_INTERVAL
-                and len(prediction_buffer) >= 1):
+                and len(prediction_buffer) == 0
+                and last_committed_target is not None):
+            print("[TARGET] return-to-home (no active trajectory)", flush=True)
+            publisher.publish(KIND_IGNORE)
+            last_committed_target = None
+            last_print_time = now
 
-            xs = [e[0] for e in prediction_buffer]
-            ys = [e[1] for e in prediction_buffer]
-            median_x = int(round(float(np.median(xs))))
-            median_y = int(round(float(np.median(ys))))
-            median_pt = (median_x, median_y)
+        # ── Convergence-based commit ───────────────────────────────────────
+        if (now - last_print_time >= PRINT_INTERVAL
+                and len(prediction_buffer) >= MIN_BUFFER_FOR_COMMIT):
 
-            in_zone = in_critical_zone(median_x, median_y)
-            cm_x, cm_y = px_to_cm(median_x, median_y)
+            # Use only the MOST RECENT samples — early predictions in a sweep
+            # are noisy; late ones (puck close to goal) are accurate.
+            recent = prediction_buffer[-RECENT_N:] if len(prediction_buffer) >= RECENT_N \
+                                                  else prediction_buffer
+            xs = [e[0] for e in recent]
+            ys = [e[1] for e in recent]
 
-            # Skip insignificant movements — only publish when the target has
-            # moved more than TARGET_DEADBAND pixels since the last commit.
+            # Convergence check: latest few predictions must agree.
+            # If they're still spreading, the puck hasn't settled — wait.
+            spread = float(max(xs) - min(xs))
+            converged = spread <= CONVERGE_SPREAD_PX
+
+            # Average (mean) the converged samples for a stable target.
+            mean_x = int(round(float(np.mean(xs))))
+            mean_y = int(round(float(np.mean(ys))))
+            mean_pt = (mean_x, mean_y)
+
+            in_zone = in_critical_zone(mean_x, mean_y)
+            cm_x, cm_y = px_to_cm(mean_x, mean_y)
+
+            # Anchor-and-refine deadband:
+            #   first commit of a trajectory  -> small threshold (anchor)
+            #   later commits (mid-trajectory) -> big threshold (refine only on big shifts)
+            if last_committed_target is None:
+                deadband = ANCHOR_DEADBAND_PX
+            else:
+                deadband = REFINE_DEADBAND_PX
+
             moved_enough = (last_committed_target is None or
-                            point_distance(median_pt, last_committed_target) > TARGET_DEADBAND)
+                            point_distance(mean_pt, last_committed_target) > deadband)
 
-            if moved_enough:
+            # DEFEND fires whenever predictions have converged.
+            # IGNORE/NO_TRACK fires immediately so the mallet snaps home.
+            ready_to_commit = (in_zone and converged) or (not in_zone)
+
+            if ready_to_commit and moved_enough:
                 tag = "DEFEND" if in_zone else "ignore"
 
-                print(f"[TARGET] px=({median_x},{median_y})  "
-                    f"cm=({cm_x:+.1f},{cm_y:+.1f})  zone={tag}",
+                print(f"[TARGET] px=({mean_x},{mean_y})  "
+                    f"cm=({cm_x:+.1f},{cm_y:+.1f})  zone={tag}  "
+                    f"(spread={int(spread)}px, n={len(recent)})",
                 flush=True)
 
                 if filtered_vel is not None:
@@ -529,7 +571,9 @@ def main():
                     confidence=1.0,
                 )
 
-                last_committed_target = median_pt
+                # On IGNORE the trajectory is over — clear anchor so the
+                # next DEFEND fires with the tight ANCHOR_DEADBAND.
+                last_committed_target = None if not in_zone else mean_pt
 
             # Always advance the rate-limit timer, even if we didn't publish,
             # so we don't burn CPU re-evaluating the same frame.

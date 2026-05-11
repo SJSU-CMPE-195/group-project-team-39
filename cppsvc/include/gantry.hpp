@@ -17,11 +17,11 @@ static constexpr int GANTRY_Y_MAX_ROTATIONS =
     8095; // North-South from play side POV; Units in degrees
 static constexpr float HOMING_STEP_DEG = 10.0f;
 
-static constexpr float RAMP_BASE_RPM       = 1200.0f;
-static constexpr float RAMP_START_RPM_FRAC = 0.25f;
-static constexpr float RAMP_END_RPM_FRAC   = 0.25f;
-static constexpr float RAMP_UP_FRACTION    = 0.20f;
-static constexpr float RAMP_DOWN_FRACTION  = 0.20f;
+static constexpr float RAMP_BASE_RPM       = 1300.0f;
+static constexpr float RAMP_START_RPM_FRAC = 0.50f;
+static constexpr float RAMP_END_RPM_FRAC   = 0.50f;
+static constexpr float RAMP_UP_FRACTION    = 0.08f;
+static constexpr float RAMP_DOWN_FRACTION  = 0.08f;
 
 static constexpr float X_DEG_TO_MM =
     float(GANTRY_X_MAX_ROTATIONS) /
