@@ -1,35 +1,36 @@
-#include <arpa/inet.h>
-
+#include <algorithm>
+#include <cerrno>
 #include <csignal>
 #include <cstdint>
-#include <netinet/in.h>
-#include <stdio.h>
-#include <sys/socket.h>
-#include <unistd.h>
-
-#include <chrono>
 #include <cstring>
 #include <iostream>
-#include <string>
-#include <thread>
+#include <stdexcept>
 
 #include "gantry.hpp"
 #include "iSV57T.hpp"
+#include "ipc_handler.hpp"
 #include "limitSwitch.hpp"
 
+// Default gantry position when idle (center-south, mm)
+static constexpr unsigned DEFAULT_X_MM = 434;
+static constexpr unsigned DEFAULT_Y_MM = 0;
+
+// Graceful shutdown on SIGINT / SIGTERM
+static volatile sig_atomic_t g_running = 1;
+static void signal_handler(int) { g_running = 0; }
+
 int main() {
-  const char *gpio_chip4_char = "/dev/gpiochip4"; // For the limit switch GPIO
-  const char *gpio_chip0_char = "/dev/gpiochip0"; // For the motors GPIO
+  // ── GPIO chip handles ─────────────────────────────────────────────────────
+  const char *gpio_chip4_char = "/dev/gpiochip4"; // limit switches
+  const char *gpio_chip0_char = "/dev/gpiochip0"; // motors
 
-  // m1
-  const unsigned m1_dir_line = 8; // Physical Pin 13
-  const unsigned m1_pul_line = 9; // Physical Pin 14
-
-  // m2
+  // Motor pin assignments
+  const unsigned m1_dir_line = 8;  // Physical Pin 13
+  const unsigned m1_pul_line = 9;  // Physical Pin 14
   const unsigned m2_dir_line = 12; // Physical Pin 15
   const unsigned m2_pul_line = 13; // Physical Pin 16
 
-  // limit switch
+  // Limit switch pin assignments
   const unsigned sw1_line = 1; // Physical Pin 17
   const unsigned sw2_line = 2; // Physical Pin 18
 
@@ -39,116 +40,99 @@ int main() {
   if (!chip0) {
     fprintf(stderr, "Failed to open %s for motor pins: %s\n", gpio_chip0_char,
             strerror(errno));
-    gpiod_chip_close(chip0);
-    return 0;
+    return 1;
   }
 
   gpiod_chip *chip4 = gpiod_chip_open(gpio_chip4_char);
   if (!chip4) {
     fprintf(stderr, "Failed to open %s for limit switches: %s\n",
             gpio_chip4_char, strerror(errno));
-    gpiod_chip_close(chip4);
-    return 0;
+    gpiod_chip_close(chip0);
+    return 1;
   }
 
-  std::cout << "Initializing limit switch objects...\n";
-
+  // ── Hardware object construction ──────────────────────────────────────────
+  std::cout << "Initializing limit switches...\n";
   limitSwitch sw_x(chip4, sw1_line);
   limitSwitch sw_y(chip4, sw2_line);
+  std::cout << "Limit switches ready.\n";
 
-  std::cout << "Finished limit switch object initialization!\n";
+  std::cout << "Initializing motors...\n";
+  iSV57T m_lower(chip0, m1_dir_line, m1_pul_line, pulse_per_rev);
+  iSV57T m_upper(chip0, m2_dir_line, m2_pul_line, pulse_per_rev);
+  std::cout << "Motors ready.\n";
 
-  // Testing the limit switch for a reading
-  // std::thread sw1_thread([&]() {
-  //   while (sw1.read() != 1) {
-  //   }
-  //   std::cout << "Limit switch 1 (Y-axis) triggered!\n";
-  // });
+  std::cout << "Initializing gantry...\n";
+  gantry g(m_lower, m_upper, sw_x, sw_y);
+  std::cout << "Gantry ready.\n";
 
-  // std::thread sw2_thread([&]() {
-  //   while (sw2.read() != 1) {
-  //   }
-  //   std::cout << "Limit switch 2 (X-axis) triggered!\n";
-  // });
+  // ── IPC handler ───────────────────────────────────────────────────────────
+  std::cout << "Opening IPC...\n";
+  IPCHandler ipc;
+  std::cout << "IPC ready.\n";
 
-  std::cout << "Initializing motor object...\n";
+  // ── Signal handlers ───────────────────────────────────────────────────────
+  std::signal(SIGINT, signal_handler);
+  std::signal(SIGTERM, signal_handler);
 
-  iSV57T m_lower = iSV57T(chip0, m1_dir_line, m1_pul_line, pulse_per_rev);
-  iSV57T m_upper = iSV57T(chip0, m2_dir_line, m2_pul_line, pulse_per_rev);
-
-  // Setting RPM Test
-  // m_lower.set_target_rpm(500);
-  // m_upper.set_target_rpm(500);
-
-  std::cout << "Finished motor object initialization!\n";
-
-  // Gantry Object Initialization
-  std::cout << "Initializing gantry object...\n";
-
-  gantry g = gantry(m_lower, m_upper, sw_x, sw_y);
-
-  std::cout << "Finished gantry object initialization!\n";
-
-  std::cout << "Starting motor rotations...\n";
-
-  // Make the rotate_motor function public when testing.
-  // Moving North
-  // g.rotate_motors(1440, iSV57T::CCW, iSV57T::CW, gantry::MotorSelect::BOTH);
-
-  // Moving South
-  // g.rotate_motors(1440, iSV57T::CW, iSV57T::CCW, gantry::MotorSelect::BOTH);
-
-  // Moving East
-  // g.rotate_motors(1440, iSV57T::CCW, iSV57T::CCW, gantry::MotorSelect::BOTH);
-
-  // Moving West
-  // g.rotate_motors(1440, iSV57T::CW, iSV57T::CW, gantry::MotorSelect::BOTH);
-
-  // Move to Origin Test
-  // std::cout << "Moving to origin...\n";
+  // ── Startup sequence ──────────────────────────────────────────────────────
+  std::cout << "Homing gantry...\n";
+  ipc.write_status(0.0f, 0.0f, AirHockey::HOMING, 0);
 
   // g.move_to_origin();
 
-  // g.move_y(GANTRY_Y_MAX_LENGTH, true);
-  // g.move_to_coord(GANTRY_X_MAX_LENGTH, GANTRY_Y_MAX_LENGTH);
-  // g.move_to_coord(300, 300);
-  // g.move_to_coord(0, 600);
-  // g.move_to_coord(0, 0);
+  std::cout << "Homing complete.\n";
 
-  // g.move_to_coord(0, GANTRY_Y_MAX_LENGTH);
-  // g.move_to_coord(GANTRY_X_MAX_LENGTH, GANTRY_Y_MAX_LENGTH);
-  // g.move_to_coord(0, 0);
+  std::cout << "Moving to default position (" << DEFAULT_X_MM << ", "
+            << DEFAULT_Y_MM << ")...\n";
+  g.move_to_coord(DEFAULT_X_MM, DEFAULT_Y_MM);
+  ipc.write_status(static_cast<float>(DEFAULT_X_MM),
+                   static_cast<float>(DEFAULT_Y_MM), AirHockey::STATE_IDLE,
+                   1 // ready
+  );
+  std::cout << "Ready. Entering command loop.\n";
 
-  // std::cout << "Finished moving to origin!\n";
+  // ── Command loop ──────────────────────────────────────────────────────────
+  float curr_x = static_cast<float>(DEFAULT_X_MM);
+  float curr_y = static_cast<float>(DEFAULT_Y_MM);
 
-  // Calibration Function
-  // std::cout << "Calibration testing...\n";
+  while (g_running) {
+    IPCHandler::CommandData cmd;
+    ipc.wait_for_command(cmd);
 
-  // g.calibration_test();
+    if (!g_running)
+      break;
 
-  // std::cout << "Calibration Test Complete!\n";
+    std::cout << "[CMD] seq=" << cmd.seq
+              << " cmd=" << static_cast<int>(cmd.command) << " target=("
+              << cmd.target_x_mm << "," << cmd.target_y_mm << ")\n";
 
-  // Move coordinate test
-  // g.move_to_coord(50, 300);
+    // Signal that we are moving
+    ipc.write_status(curr_x, curr_y, AirHockey::MOVING, 0);
 
-  // Delay line
-  // std::this_thread::sleep_for(std::chrono::milliseconds(500));
+    // Clamp target to valid gantry range
+    unsigned tx = static_cast<unsigned>(
+        std::clamp(static_cast<int>(cmd.target_x_mm), 0, GANTRY_X_MAX_LENGTH));
+    unsigned ty = static_cast<unsigned>(
+        std::clamp(static_cast<int>(cmd.target_y_mm), 0, GANTRY_Y_MAX_LENGTH));
 
-  std::cout << "Ending motor rotations...\n";
+    try {
+      g.move_to_coord(tx, ty);
+    } catch (const std::exception &e) {
+      std::cerr << "[ERROR] move_to_coord failed: " << e.what() << "\n";
+      ipc.write_status(curr_x, curr_y, AirHockey::ERROR, 0);
+      continue;
+    }
 
-  // sw1_thread.join();
-  // sw2_thread.join();
+    curr_x = static_cast<float>(tx);
+    curr_y = static_cast<float>(ty);
 
+    ipc.write_status(curr_x, curr_y, AirHockey::STATE_IDLE, 1);
+    std::cout << "[DONE] at (" << curr_x << "," << curr_y << ")\n";
+  }
+
+  std::cout << "Shutting down...\n";
   gpiod_chip_close(chip4);
   gpiod_chip_close(chip0);
-
   return 0;
 }
-
-// 63.7919 left to right mmm = 7900 degrees
-
-// 7800 degrees top to bottom
-
-// 125 mm diagonal == 43 rotation of 360 = 15480 degrees
-
-// Golden Ratio: 123.84 degrees per 1 mm

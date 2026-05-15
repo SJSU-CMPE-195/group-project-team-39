@@ -12,4 +12,9 @@ add_executable(cppsvc main.cpp ${SOURCES})
 
 target_include_directories(cppsvc PRIVATE include)
 
-target_link_libraries(cppsvc PRIVATE gpiod Threads::Threads)
+# rt provides shm_open / sem_open on Linux; macOS includes them in libc
+if(UNIX AND NOT APPLE)
+    target_link_libraries(cppsvc PRIVATE gpiod Threads::Threads rt)
+else()
+    target_link_libraries(cppsvc PRIVATE gpiod Threads::Threads)
+endif()

@@ -25,7 +25,7 @@ static constexpr float RAMP_START_RPM_FRAC =
 static constexpr float RAMP_END_RPM_FRAC =
     0.10f; // end speed as fraction of cruise RPM
 static constexpr float RAMP_UP_FRACTION =
-    0.0f; // fraction of move spent ramping up
+    0.15f; // fraction of move spent ramping up
 static constexpr float RAMP_DOWN_FRACTION =
     0.15f; // fraction of move spent ramping down
 
