@@ -14,13 +14,13 @@ import sys
 REQUEST_W = 2560
 REQUEST_H = 1440
 
-ROI_X, ROI_Y, ROI_W, ROI_H = 155, 21, 651, 686
-
+ROI_X, ROI_Y, ROI_W, ROI_H = 274, 19, 629, 672
+#155, 21, 651, 686
 #154, 11, 622, 691
 
 # X calibration bounds for edge clamping
 X_LEFT_BOUND = 0
-X_RIGHT_BOUND = 660
+X_RIGHT_BOUND = 672
 EDGE_RANGE = 45
 
 # Only allow INTERCEPT targets inside this pixel X range
@@ -28,7 +28,10 @@ INTERCEPT_X_MIN_PX = 230
 INTERCEPT_X_MAX_PX = 430
 
 INTERCEPT_Y_MIN_PX = 0
-INTERCEPT_Y_MAX_PX = 20
+INTERCEPT_Y_MAX_PX = 95
+
+STILL_Y_MAX_PX = ROI_W
+STILL_Y_DIFF = 100
 
 # Rotate cropped ROI 90 degrees clockwise
 ROTATE_CAMERA_CW = True
@@ -270,6 +273,12 @@ def publish_coordinate(kind, x_mm, y_mm):
     # Odd seq means "write in progress"
     shm_set_u32(0, py_seq)
 
+    if x_mm > 230.0:
+        x_mm = x_mm + x_mm * 0.07
+
+    if x_mm >= 869.0:
+        x_mm = 869.0
+
     # Write payload
     shm_set_u32(12, kind)
     shm_set_f64(16, x_mm)
@@ -283,30 +292,69 @@ def publish_coordinate(kind, x_mm, y_mm):
 
     return (time.perf_counter() - t0) * 1000.0
 
-
 def px_to_mm(pt):
-    # Convert a pixel coordinate into millimeters using bottom-left
-    # as the physical origin of the processed rotated frame.
+    # Convert a pixel coordinate into millimeters.
+    # OpenCV image coordinates use top-left origin:
+    #   y_px = 0 is near the top of the image.
+    #   y_phys_px = 0 is physical bottom / your side.
+    # So we flip y once and use y_phys_px for both:
+    #   1. normal y_mm conversion
+    #   2. y edge clamping
     if pt is None:
         return None
 
     x_px = pt[0]
     y_px = pt[1]
 
-    x_mm = x_px * MM_PER_PX_X
-    y_mm = (PROC_H - 1 - y_px) * MM_PER_PX_Y
+    # Convert OpenCV top-origin y into physical bottom-origin y
+    y_phys_px = PROC_H - 1 - y_px
 
+    # Normal pixel-to-mm conversion
+    x_mm = x_px * MM_PER_PX_X
+    y_mm = y_phys_px * MM_PER_PX_Y
+
+    # Clamp x near physical left edge
     if x_px >= X_LEFT_BOUND and x_px <= X_LEFT_BOUND + EDGE_RANGE:
         x_mm = 0.0
 
+    # Clamp x near physical right edge
     elif x_px >= X_RIGHT_BOUND - EDGE_RANGE and x_px <= X_RIGHT_BOUND:
         x_mm = 869.0
 
-    if y_px >= INTERCEPT_Y_MIN_PX and y_px <= INTERCEPT_Y_MAX_PX:
+    # Clamp y near physical bottom edge
+    # Use y_phys_px, not raw y_px.
+    if y_phys_px >= INTERCEPT_Y_MIN_PX and y_phys_px <= INTERCEPT_Y_MAX_PX:
         y_mm = 0.0
+
+    # Clamp y near physical top edge
+    # Use y_phys_px, not raw y_px.
+    if y_phys_px <= STILL_Y_MAX_PX and y_phys_px >= STILL_Y_MAX_PX - STILL_Y_DIFF:
+        y_mm = 901.0
 
     return x_mm, y_mm
 
+# def px_to_mm(pt):
+#     # Convert a pixel coordinate into millimeters using bottom-left
+#     # as the physical origin of the processed rotated frame.
+#     if pt is None:
+#         return None
+
+#     x_px = pt[0]
+#     y_px = pt[1]
+
+#     x_mm = x_px * MM_PER_PX_X
+#     y_mm = (PROC_H - 1 - y_px) * MM_PER_PX_Y
+
+#     if x_px >= X_LEFT_BOUND and x_px <= X_LEFT_BOUND + EDGE_RANGE:
+#         x_mm = 0.0
+
+#     elif x_px >= X_RIGHT_BOUND - EDGE_RANGE and x_px <= X_RIGHT_BOUND:
+#         x_mm = 869.0
+
+#     if y_px >= INTERCEPT_Y_MIN_PX and y_px <= INTERCEPT_Y_MAX_PX:
+#         y_mm = 0.0
+
+#     return x_mm, y_mm
 
 def green_mask_hsv(frame_bgr):
     # Build a binary mask for green pixels in the frame

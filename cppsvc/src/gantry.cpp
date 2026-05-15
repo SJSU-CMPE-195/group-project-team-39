@@ -389,6 +389,9 @@ bool gantry::move_to_rest_point() {
   const unsigned rest_x = GANTRY_X_MAX_LENGTH / 2;
   const unsigned rest_y = 0;
 
+  // m_lower_motor.set_target_rpm(900);
+  // m_upper_motor.set_target_rpm(900);
+
   move_to_coord(rest_x, rest_y);
   return true;
 }
